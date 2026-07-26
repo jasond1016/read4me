@@ -52,6 +52,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -1045,6 +1046,7 @@ fun ReviewScreen(
     var editableBook by remember(book.id) { mutableStateOf(book) }
     var playingOrdinal by remember { mutableStateOf<Int?>(null) }
     var previewPositionMs by remember { mutableStateOf<Long?>(null) }
+    val waveformCache = remember(book.id) { mutableStateMapOf<WaveformCacheKey, FloatArray>() }
     DisposableEffect(Unit) { onDispose { player.stop() } }
 
     fun setBoundary(markerIndex: Int, timestampMs: Long) {
@@ -1097,6 +1099,13 @@ fun ReviewScreen(
                 val sourceEndMs = marker.overrideDurationMs
                     ?.takeIf { marker.overrideAudioFile != null }
                     ?: (editableBook.markers.getOrNull(spread.ordinal)?.timestampMs ?: editableBook.durationMs)
+                val waveformKey = WaveformCacheKey(
+                    path = spread.audioFile.absolutePath,
+                    modifiedMs = spread.audioFile.lastModified(),
+                    sizeBytes = spread.audioFile.length(),
+                    startMs = sourceStartMs,
+                    endMs = sourceEndMs,
+                )
                 val hasSharedBoundary = spread.ordinal < editableBook.spreads.size &&
                     marker.overrideAudioFile == null &&
                     editableBook.markers[spread.ordinal].overrideAudioFile == null
@@ -1104,6 +1113,8 @@ fun ReviewScreen(
                     spread = spread,
                     playing = playingOrdinal == spread.ordinal,
                     previewPositionMs = previewPositionMs?.takeIf { playingOrdinal == spread.ordinal },
+                    waveform = waveformCache[waveformKey],
+                    onWaveformLoaded = { waveformCache[waveformKey] = it },
                     trimRange = sourceStartMs.toFloat()..sourceEndMs.toFloat(),
                     boundaryValueMs = editableBook.markers.getOrNull(spread.ordinal)
                         ?.timestampMs
@@ -1176,6 +1187,8 @@ private fun SpreadReviewCard(
     spread: StorySpread,
     playing: Boolean,
     previewPositionMs: Long?,
+    waveform: FloatArray?,
+    onWaveformLoaded: (FloatArray) -> Unit,
     trimRange: ClosedFloatingPointRange<Float>,
     boundaryValueMs: Long?,
     boundaryRange: ClosedFloatingPointRange<Float>?,
@@ -1193,11 +1206,8 @@ private fun SpreadReviewCard(
     var boundaryValue by remember(boundaryValueMs) {
         mutableFloatStateOf((boundaryValueMs ?: spread.endMs).toFloat())
     }
-    var waveform by remember(spread.audioFile, trimRange.start, trimRange.endInclusive) {
-        mutableStateOf<FloatArray?>(null)
-    }
-    LaunchedEffect(spread.audioFile, trimRange.start, trimRange.endInclusive) {
-        waveform = withContext(Dispatchers.IO) {
+    LaunchedEffect(spread.audioFile, trimRange.start, trimRange.endInclusive, waveform) {
+        if (waveform == null) onWaveformLoaded(withContext(Dispatchers.IO) {
             runCatching {
                 AudioWaveformExtractor().extract(
                     spread.audioFile,
@@ -1205,7 +1215,7 @@ private fun SpreadReviewCard(
                     trimRange.endInclusive.toLong(),
                 )
             }.getOrElse { FloatArray(0) }
-        }
+        })
     }
     Card(
         shape = RoundedCornerShape(22.dp),
@@ -1373,6 +1383,14 @@ private fun SpreadReviewCard(
         }
     }
 }
+
+private data class WaveformCacheKey(
+    val path: String,
+    val modifiedMs: Long,
+    val sizeBytes: Long,
+    val startMs: Long,
+    val endMs: Long,
+)
 
 @Composable
 private fun StoryImage(file: File?, modifier: Modifier = Modifier) {
