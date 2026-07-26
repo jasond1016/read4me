@@ -9,6 +9,7 @@ import androidx.camera.view.CameraController
 import androidx.camera.view.LifecycleCameraController
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -59,6 +60,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -70,6 +72,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.read4me.app.audio.AudioSegmentPlayer
+import com.read4me.app.audio.AudioWaveformExtractor
 import com.read4me.app.audio.StoryAudioRecorder
 import com.read4me.app.data.StoryRepository
 import com.read4me.app.model.MarkerSource
@@ -82,6 +85,8 @@ import com.read4me.app.vision.OrbPageMatcher
 import com.read4me.app.vision.PageTurnDetector
 import com.read4me.app.vision.VisualFingerprint
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -1014,11 +1019,13 @@ fun ReviewScreen(
     val player = remember { AudioSegmentPlayer() }
     var editableBook by remember(book.id) { mutableStateOf(book) }
     var playingOrdinal by remember { mutableStateOf<Int?>(null) }
+    var previewPositionMs by remember { mutableStateOf<Long?>(null) }
     DisposableEffect(Unit) { onDispose { player.stop() } }
 
     fun setBoundary(markerIndex: Int, timestampMs: Long) {
         player.stop()
         playingOrdinal = null
+        previewPositionMs = null
         editableBook = StoryBookEditor.moveBoundary(editableBook, markerIndex, timestampMs)
         repository.save(editableBook)
     }
@@ -1026,6 +1033,7 @@ fun ReviewScreen(
     fun trimNarration(ordinal: Int, startMs: Long, endMs: Long) {
         player.stop()
         playingOrdinal = null
+        previewPositionMs = null
         editableBook = StoryBookEditor.trimNarration(editableBook, ordinal, startMs, endMs)
         repository.save(editableBook)
     }
@@ -1033,6 +1041,7 @@ fun ReviewScreen(
     fun mergeWithNext(ordinal: Int) {
         player.stop()
         playingOrdinal = null
+        previewPositionMs = null
         editableBook = StoryBookEditor.mergeWithNext(editableBook, ordinal)
         repository.save(editableBook)
     }
@@ -1069,6 +1078,7 @@ fun ReviewScreen(
                 SpreadReviewCard(
                     spread = spread,
                     playing = playingOrdinal == spread.ordinal,
+                    previewPositionMs = previewPositionMs?.takeIf { playingOrdinal == spread.ordinal },
                     trimRange = sourceStartMs.toFloat()..sourceEndMs.toFloat(),
                     boundaryValueMs = editableBook.markers.getOrNull(spread.ordinal)
                         ?.timestampMs
@@ -1097,11 +1107,23 @@ fun ReviewScreen(
                         if (playingOrdinal == spread.ordinal) {
                             player.stop()
                             playingOrdinal = null
+                            previewPositionMs = null
                         } else {
                             playingOrdinal = spread.ordinal
+                            previewPositionMs = null
                             player.play(spread.audioFile, spread.startMs, spread.endMs) {
                                 playingOrdinal = null
+                                previewPositionMs = null
                             }
+                        }
+                    },
+                    onPreview = { startMs, endMs ->
+                        player.stop()
+                        playingOrdinal = spread.ordinal
+                        previewPositionMs = startMs
+                        player.play(spread.audioFile, startMs, endMs) {
+                            playingOrdinal = null
+                            previewPositionMs = null
                         }
                     },
                 )
@@ -1128,6 +1150,7 @@ fun ReviewScreen(
 private fun SpreadReviewCard(
     spread: StorySpread,
     playing: Boolean,
+    previewPositionMs: Long?,
     trimRange: ClosedFloatingPointRange<Float>,
     boundaryValueMs: Long?,
     boundaryRange: ClosedFloatingPointRange<Float>?,
@@ -1137,12 +1160,27 @@ private fun SpreadReviewCard(
     onRerecord: () -> Unit,
     onRecapture: () -> Unit,
     onPlay: () -> Unit,
+    onPreview: (Long, Long) -> Unit,
 ) {
     var trimValue by remember(spread.startMs, spread.endMs) {
         mutableStateOf(spread.startMs.toFloat()..spread.endMs.toFloat())
     }
     var boundaryValue by remember(boundaryValueMs) {
         mutableFloatStateOf((boundaryValueMs ?: spread.endMs).toFloat())
+    }
+    var waveform by remember(spread.audioFile, trimRange.start, trimRange.endInclusive) {
+        mutableStateOf<FloatArray?>(null)
+    }
+    LaunchedEffect(spread.audioFile, trimRange.start, trimRange.endInclusive) {
+        waveform = withContext(Dispatchers.IO) {
+            runCatching {
+                AudioWaveformExtractor().extract(
+                    spread.audioFile,
+                    trimRange.start.toLong(),
+                    trimRange.endInclusive.toLong(),
+                )
+            }.getOrElse { FloatArray(0) }
+        }
     }
     Card(
         shape = RoundedCornerShape(22.dp),
@@ -1207,6 +1245,58 @@ private fun SpreadReviewCard(
                     valueRange = trimRange,
                     modifier = Modifier.fillMaxWidth(),
                 )
+                val peaks = waveform
+                if (peaks == null) {
+                    Text("正在读取波形…", style = MaterialTheme.typography.bodyMedium, color = Ink.copy(alpha = .45f))
+                } else if (peaks.isNotEmpty()) {
+                    val waveformColor = Moss
+                    val playheadColor = Color(0xFFC85A3C)
+                    Canvas(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(52.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(Paper)
+                            .pointerInput(peaks, trimRange) {
+                                detectTapGestures { offset ->
+                                    val fraction = (offset.x / size.width).coerceIn(0f, 1f)
+                                    val position = (trimRange.start + fraction *
+                                        (trimRange.endInclusive - trimRange.start)).toLong()
+                                        .coerceAtMost(trimRange.endInclusive.toLong() - 1L)
+                                    onPreview(position, minOf(position + 2_000L, trimRange.endInclusive.toLong()))
+                                }
+                            },
+                    ) {
+                        val center = size.height / 2f
+                        peaks.forEachIndexed { index, peak ->
+                            val x = (index + .5f) * size.width / peaks.size
+                            val half = maxOf(1f, peak * center * .88f)
+                            drawLine(waveformColor, Offset(x, center - half), Offset(x, center + half), 1.5f)
+                        }
+                        previewPositionMs?.let {
+                            val fraction = ((it - trimRange.start) /
+                                (trimRange.endInclusive - trimRange.start)).coerceIn(0f, 1f)
+                            val x = fraction * size.width
+                            drawLine(playheadColor, Offset(x, 0f), Offset(x, size.height), 3f)
+                        }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        TextButton(
+                            onClick = {
+                                val start = trimValue.start.toLong()
+                                onPreview(start, minOf(start + 2_000L, trimValue.endInclusive.toLong()))
+                            },
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                        ) { Text("试听开头") }
+                        TextButton(
+                            onClick = {
+                                val end = trimValue.endInclusive.toLong()
+                                onPreview(maxOf(trimValue.start.toLong(), end - 2_000L), end)
+                            },
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                        ) { Text("试听结尾") }
+                    }
+                }
                 if (trimValue.start > trimRange.start || trimValue.endInclusive < trimRange.endInclusive) {
                     TextButton(
                         onClick = {
