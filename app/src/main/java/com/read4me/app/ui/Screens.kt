@@ -1,6 +1,5 @@
 package com.read4me.app.ui
 
-import android.graphics.BitmapFactory
 import androidx.activity.compose.BackHandler
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
@@ -1049,6 +1048,19 @@ fun ReviewScreen(
     val waveformCache = remember(book.id) { mutableStateMapOf<WaveformCacheKey, FloatArray>() }
     DisposableEffect(Unit) { onDispose { player.stop() } }
 
+    LaunchedEffect(editableBook) {
+        editableBook.spreads.forEach { spread ->
+            val key = waveformCacheKey(editableBook, spread)
+            if (waveformCache[key] == null) {
+                waveformCache[key] = withContext(Dispatchers.IO) {
+                    runCatching {
+                        AudioWaveformExtractor().extract(spread.audioFile, key.startMs, key.endMs)
+                    }.getOrElse { FloatArray(0) }
+                }
+            }
+        }
+    }
+
     fun setBoundary(markerIndex: Int, timestampMs: Long) {
         player.stop()
         playingOrdinal = null
@@ -1099,13 +1111,7 @@ fun ReviewScreen(
                 val sourceEndMs = marker.overrideDurationMs
                     ?.takeIf { marker.overrideAudioFile != null }
                     ?: (editableBook.markers.getOrNull(spread.ordinal)?.timestampMs ?: editableBook.durationMs)
-                val waveformKey = WaveformCacheKey(
-                    path = spread.audioFile.absolutePath,
-                    modifiedMs = spread.audioFile.lastModified(),
-                    sizeBytes = spread.audioFile.length(),
-                    startMs = sourceStartMs,
-                    endMs = sourceEndMs,
-                )
+                val waveformKey = waveformCacheKey(editableBook, spread)
                 val hasSharedBoundary = spread.ordinal < editableBook.spreads.size &&
                     marker.overrideAudioFile == null &&
                     editableBook.markers[spread.ordinal].overrideAudioFile == null
@@ -1114,7 +1120,6 @@ fun ReviewScreen(
                     playing = playingOrdinal == spread.ordinal,
                     previewPositionMs = previewPositionMs?.takeIf { playingOrdinal == spread.ordinal },
                     waveform = waveformCache[waveformKey],
-                    onWaveformLoaded = { waveformCache[waveformKey] = it },
                     trimRange = sourceStartMs.toFloat()..sourceEndMs.toFloat(),
                     boundaryValueMs = editableBook.markers.getOrNull(spread.ordinal)
                         ?.timestampMs
@@ -1188,7 +1193,6 @@ private fun SpreadReviewCard(
     playing: Boolean,
     previewPositionMs: Long?,
     waveform: FloatArray?,
-    onWaveformLoaded: (FloatArray) -> Unit,
     trimRange: ClosedFloatingPointRange<Float>,
     boundaryValueMs: Long?,
     boundaryRange: ClosedFloatingPointRange<Float>?,
@@ -1205,17 +1209,6 @@ private fun SpreadReviewCard(
     }
     var boundaryValue by remember(boundaryValueMs) {
         mutableFloatStateOf((boundaryValueMs ?: spread.endMs).toFloat())
-    }
-    LaunchedEffect(spread.audioFile, trimRange.start, trimRange.endInclusive, waveform) {
-        if (waveform == null) onWaveformLoaded(withContext(Dispatchers.IO) {
-            runCatching {
-                AudioWaveformExtractor().extract(
-                    spread.audioFile,
-                    trimRange.start.toLong(),
-                    trimRange.endInclusive.toLong(),
-                )
-            }.getOrElse { FloatArray(0) }
-        })
     }
     Card(
         shape = RoundedCornerShape(22.dp),
@@ -1392,14 +1385,36 @@ private data class WaveformCacheKey(
     val endMs: Long,
 )
 
+private fun waveformCacheKey(book: StoryBook, spread: StorySpread): WaveformCacheKey {
+    val marker = book.markers[spread.ordinal - 1]
+    val sourceStartMs = if (marker.overrideAudioFile != null) 0L else marker.timestampMs
+    val sourceEndMs = marker.overrideDurationMs
+        ?.takeIf { marker.overrideAudioFile != null }
+        ?: (book.markers.getOrNull(spread.ordinal)?.timestampMs ?: book.durationMs)
+    return WaveformCacheKey(
+        path = spread.audioFile.absolutePath,
+        modifiedMs = spread.audioFile.lastModified(),
+        sizeBytes = spread.audioFile.length(),
+        startMs = sourceStartMs,
+        endMs = sourceEndMs,
+    )
+}
+
 @Composable
 private fun StoryImage(file: File?, modifier: Modifier = Modifier) {
-    val bitmap = remember(file?.absolutePath, file?.lastModified()) {
-        file?.takeIf(File::exists)?.let { BitmapFactory.decodeFile(it.absolutePath) }
+    val imageKey = file?.let { "${it.absolutePath}:${it.lastModified()}:${it.length()}" }
+    var bitmap by remember(imageKey) {
+        mutableStateOf(file?.let(StoryImageLoader::cached))
     }
-    if (bitmap != null) {
+    LaunchedEffect(imageKey) {
+        if (bitmap == null && file != null) {
+            bitmap = withContext(Dispatchers.IO) { StoryImageLoader.load(file) }
+        }
+    }
+    val currentBitmap = bitmap
+    if (currentBitmap != null) {
         Image(
-            bitmap = bitmap.asImageBitmap(),
+            bitmap = currentBitmap.asImageBitmap(),
             contentDescription = "绘本书面",
             contentScale = ContentScale.Crop,
             modifier = modifier,
