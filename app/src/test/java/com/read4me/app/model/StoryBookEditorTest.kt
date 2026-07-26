@@ -6,6 +6,24 @@ import java.io.File
 
 class StoryBookEditorTest {
     @Test
+    fun replacingReferencePreservesTimingAudioAndOtherMarkers() {
+        val source = book()
+        val replacement = File("replacement.jpg")
+        val edited = StoryBookEditor.replaceReference(source, 2, replacement, byteArrayOf(1, 2))
+
+        assertEquals(replacement, edited.markers[1].imageFile)
+        assertEquals(listOf(0L, 1_000L, 2_000L), edited.markers.map { it.timestampMs })
+        assertEquals(source.audioFile, edited.audioFile)
+        assertEquals(source.markers[0], edited.markers[0])
+    }
+
+    @Test
+    fun replacingMissingReferenceOrdinalDoesNothing() {
+        val source = book()
+        assertEquals(source, StoryBookEditor.replaceReference(source, 99, File("replacement.jpg")))
+    }
+
+    @Test
     fun movingBoundaryKeepsBothAdjacentSpreadsAtLeastHalfSecondLong() {
         val edited = StoryBookEditor.moveBoundary(book(), markerIndex = 1, timestampMs = 1_900L)
 

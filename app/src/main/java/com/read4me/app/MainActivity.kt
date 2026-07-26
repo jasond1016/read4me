@@ -18,6 +18,7 @@ import com.read4me.app.ui.LibraryScreen
 import com.read4me.app.ui.Read4MeTheme
 import com.read4me.app.ui.RecordingScreen
 import com.read4me.app.ui.RerecordScreen
+import com.read4me.app.ui.RecaptureScreen
 import com.read4me.app.ui.ReviewScreen
 import com.read4me.app.ui.SetupScreen
 import com.read4me.app.ui.ChildReadingScreen
@@ -30,6 +31,7 @@ class MainActivity : ComponentActivity() {
         data class Recording(val title: String) : Destination
         data class Review(val book: StoryBook) : Destination
         data class Rerecord(val book: StoryBook, val ordinal: Int) : Destination
+        data class Recapture(val book: StoryBook, val ordinal: Int) : Destination
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -118,6 +120,14 @@ class MainActivity : ComponentActivity() {
                                 permissionLauncher.launch(arrayOf(Manifest.permission.RECORD_AUDIO))
                             }
                         },
+                        onRecapture = { updatedBook, ordinal ->
+                            val target = Destination.Recapture(updatedBook, ordinal)
+                            if (hasCameraPermission()) destination = target
+                            else {
+                                permissionTarget = target
+                                permissionLauncher.launch(arrayOf(Manifest.permission.CAMERA))
+                            }
+                        },
                         onBack = {
                             books = repository.loadAll()
                             destination = Destination.Library
@@ -125,6 +135,17 @@ class MainActivity : ComponentActivity() {
                     )
 
                     is Destination.Rerecord -> RerecordScreen(
+                        book = current.book,
+                        ordinal = current.ordinal,
+                        repository = repository,
+                        onCancel = { destination = Destination.Review(current.book) },
+                        onFinished = { updated ->
+                            books = repository.loadAll()
+                            destination = Destination.Review(updated)
+                        },
+                    )
+
+                    is Destination.Recapture -> RecaptureScreen(
                         book = current.book,
                         ordinal = current.ordinal,
                         repository = repository,

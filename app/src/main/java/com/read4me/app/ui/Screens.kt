@@ -536,6 +536,8 @@ fun ChildReadingScreen(books: List<StoryBook>, onExit: () -> Unit) {
     var isMoving by remember { mutableStateOf(false) }
     var pausedForPageChange by remember { mutableStateOf(false) }
     var diagnostic by remember { mutableStateOf("等待第一组稳定画面") }
+    var choosingManualSpread by remember { mutableStateOf(false) }
+    var manualCorrection by remember { mutableStateOf(false) }
 
     fun play(book: StoryBook, spread: StorySpread, geometricInliers: Int) {
         player.stop()
@@ -603,7 +605,10 @@ fun ChildReadingScreen(books: List<StoryBook>, onExit: () -> Unit) {
                                 inliers = it.inliers
                                 status = "画面找回来了，继续讲第 ${spread.ordinal} 个书面"
                             }
-                            !isCurrentSpread -> play(book, spread, it.inliers)
+                            !isCurrentSpread -> {
+                                manualCorrection = false
+                                play(book, spread, it.inliers)
+                            }
                         }
                     }
                 }
@@ -672,6 +677,14 @@ fun ChildReadingScreen(books: List<StoryBook>, onExit: () -> Unit) {
                             modifier = Modifier.padding(top = 5.dp),
                         )
                     }
+                    if (manualCorrection) {
+                        Text(
+                            "已由家长手动纠正",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = Coral,
+                            modifier = Modifier.padding(top = 5.dp),
+                        )
+                    }
                     Text(
                         diagnostic,
                         style = MaterialTheme.typography.bodyMedium,
@@ -704,6 +717,146 @@ fun ChildReadingScreen(books: List<StoryBook>, onExit: () -> Unit) {
                             ) { Text("重新播放") }
                         }
                     }
+                    TextButton(onClick = { choosingManualSpread = !choosingManualSpread }) {
+                        Text(if (choosingManualSpread) "收起手动纠正" else "家长手动纠正识别")
+                    }
+                    if (choosingManualSpread) {
+                        val choices = currentBook?.let(::listOf) ?: books
+                        Text(
+                            if (currentBook != null) "选择《${currentBook?.title}》的实际书面" else "选择实际绘本和书面",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = Ink.copy(alpha = 0.62f),
+                        )
+                        choices.forEach { choiceBook ->
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.Center,
+                            ) {
+                                choiceBook.spreads.forEach { choiceSpread ->
+                                    TextButton(onClick = {
+                                        manualCorrection = true
+                                        choosingManualSpread = false
+                                        play(choiceBook, choiceSpread, 0)
+                                        status = "手动纠正：正在讲《${choiceBook.title}》书面 ${choiceSpread.ordinal}"
+                                    }) { Text("${choiceBook.title} ${choiceSpread.ordinal}") }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun RecaptureScreen(
+    book: StoryBook,
+    ordinal: Int,
+    repository: StoryRepository,
+    onCancel: () -> Unit,
+    onFinished: (StoryBook) -> Unit,
+) {
+    BackHandler(onBack = onCancel)
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val mainExecutor = remember { ContextCompat.getMainExecutor(context) }
+    val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
+    val controller = remember {
+        LifecycleCameraController(context).apply {
+            cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
+            setEnabledUseCases(CameraController.IMAGE_CAPTURE or CameraController.IMAGE_ANALYSIS)
+        }
+    }
+    val pendingFile = remember(book.id, ordinal) {
+        File(File(book.directory, "spreads"), "%03d.pending.jpg".format(ordinal))
+    }
+    var latestFingerprint by remember { mutableStateOf<ByteArray?>(null) }
+    var isCapturing by remember { mutableStateOf(false) }
+    var message by remember { mutableStateOf("把完整书面放进白框后拍照") }
+    val fingerprintAnalyzer = remember {
+        CameraFrameAnalyzer(PageTurnDetector()) { _, luma, _ ->
+            val fingerprint = VisualFingerprint.fromLuma(luma)
+            mainExecutor.execute { latestFingerprint = fingerprint }
+        }
+    }
+
+    DisposableEffect(controller, lifecycleOwner, fingerprintAnalyzer) {
+        pendingFile.delete()
+        controller.bindToLifecycle(lifecycleOwner)
+        controller.setImageAnalysisAnalyzer(analysisExecutor, fingerprintAnalyzer)
+        onDispose {
+            controller.clearImageAnalysisAnalyzer()
+            controller.unbind()
+            analysisExecutor.shutdown()
+            pendingFile.delete()
+        }
+    }
+
+    Surface(Modifier.fillMaxSize(), color = Ink) {
+        Box(Modifier.fillMaxSize()) {
+            AndroidView(
+                factory = { viewContext ->
+                    PreviewView(viewContext).apply {
+                        scaleType = PreviewView.ScaleType.FILL_CENTER
+                        this.controller = controller
+                    }
+                },
+                modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth().aspectRatio(1.32f),
+            )
+            Box(Modifier.align(Alignment.TopCenter).fillMaxWidth().aspectRatio(1.32f)) {
+                BookGuideFrame(active = isCapturing, modifier = Modifier.align(Alignment.Center))
+            }
+            Surface(
+                color = Paper.copy(alpha = 0.97f),
+                shape = RoundedCornerShape(topStart = 30.dp, topEnd = 30.dp),
+                modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth(),
+            ) {
+                Column(
+                    Modifier.padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text("重拍书面 $ordinal", style = MaterialTheme.typography.headlineLarge)
+                    Text(message, modifier = Modifier.padding(top = 8.dp, bottom = 18.dp))
+                    Button(
+                        enabled = !isCapturing,
+                        onClick = {
+                            isCapturing = true
+                            message = "正在保存新照片……"
+                            pendingFile.delete()
+                            controller.takePicture(
+                                ImageCapture.OutputFileOptions.Builder(pendingFile).build(),
+                                mainExecutor,
+                                object : ImageCapture.OnImageSavedCallback {
+                                    override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
+                                        runCatching {
+                                            val target = repository.replaceReferenceImage(book, ordinal, pendingFile)
+                                            val updated = StoryBookEditor.replaceReference(
+                                                book,
+                                                ordinal,
+                                                target,
+                                                latestFingerprint,
+                                            )
+                                            repository.save(updated)
+                                            updated
+                                        }.onSuccess(onFinished).onFailure {
+                                            isCapturing = false
+                                            message = "替换失败，原照片已保留，请重试"
+                                        }
+                                    }
+
+                                    override fun onError(exception: ImageCaptureException) {
+                                        pendingFile.delete()
+                                        isCapturing = false
+                                        message = "拍照失败，原照片已保留，请重试"
+                                    }
+                                },
+                            )
+                        },
+                        modifier = Modifier.fillMaxWidth().height(56.dp),
+                        shape = RoundedCornerShape(18.dp),
+                    ) { Text(if (isCapturing) "保存中" else "拍下并替换") }
+                    TextButton(enabled = !isCapturing, onClick = onCancel) { Text("取消") }
                 }
             }
         }
@@ -819,6 +972,7 @@ fun ReviewScreen(
     book: StoryBook,
     repository: StoryRepository,
     onRerecord: (StoryBook, Int) -> Unit,
+    onRecapture: (StoryBook, Int) -> Unit,
     onBack: () -> Unit,
 ) {
     val player = remember { AudioSegmentPlayer() }
@@ -902,6 +1056,7 @@ fun ReviewScreen(
                         { mergeWithNext(spread.ordinal) }
                     } else null,
                     onRerecord = { onRerecord(editableBook, spread.ordinal) },
+                    onRecapture = { onRecapture(editableBook, spread.ordinal) },
                     onPlay = {
                         if (playingOrdinal == spread.ordinal) {
                             player.stop()
@@ -944,6 +1099,7 @@ private fun SpreadReviewCard(
     onBoundaryChanged: (Long) -> Unit,
     onMergeNext: (() -> Unit)?,
     onRerecord: () -> Unit,
+    onRecapture: () -> Unit,
     onPlay: () -> Unit,
 ) {
     var trimValue by remember(spread.startMs, spread.endMs) {
@@ -986,6 +1142,10 @@ private fun SpreadReviewCard(
                     contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp),
                     modifier = Modifier.padding(top = 7.dp),
                 ) { Text(if (playing) "停止" else "▶ 试听") }
+                TextButton(
+                    onClick = onRecapture,
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                ) { Text("重拍书面") }
             }
         }
         if (trimRange.endInclusive - trimRange.start >= 500f) {

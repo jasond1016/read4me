@@ -3,6 +3,23 @@ package com.read4me.app.model
 import java.io.File
 
 object StoryBookEditor {
+    fun replaceReference(
+        book: StoryBook,
+        ordinal: Int,
+        imageFile: File,
+        fingerprint: ByteArray? = null,
+        fingerprintVersion: Int = 2,
+    ): StoryBook {
+        if (ordinal <= 0 || ordinal > book.markers.size) return book
+        val markers = book.markers.toMutableList()
+        markers[ordinal - 1] = markers[ordinal - 1].copy(
+            imageFile = imageFile,
+            fingerprint = fingerprint?.copyOf(),
+            fingerprintVersion = fingerprintVersion,
+        )
+        return book.copy(markers = markers)
+    }
+
     fun moveBoundary(book: StoryBook, markerIndex: Int, timestampMs: Long): StoryBook {
         if (markerIndex <= 0 || markerIndex >= book.markers.size) return book
         val markers = book.markers.toMutableList()

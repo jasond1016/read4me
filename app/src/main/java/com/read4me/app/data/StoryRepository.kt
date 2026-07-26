@@ -8,6 +8,8 @@ import com.read4me.app.model.StoryBook
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.util.UUID
 
 class StoryRepository(context: Context) {
@@ -78,6 +80,24 @@ class StoryRepository(context: Context) {
 
     fun deleteDraft(draft: Draft) {
         draft.directory.deleteRecursively()
+    }
+
+    /** Installs a successfully captured pending image without exposing a partial reference file. */
+    fun replaceReferenceImage(book: StoryBook, ordinal: Int, pendingFile: File): File {
+        require(ordinal in 1..book.markers.size && pendingFile.isFile)
+        val spreads = File(book.directory, "spreads").apply { mkdirs() }
+        val target = book.markers[ordinal - 1].imageFile ?: File(spreads, "%03d.jpg".format(ordinal))
+        try {
+            Files.move(
+                pendingFile.toPath(),
+                target.toPath(),
+                StandardCopyOption.ATOMIC_MOVE,
+                StandardCopyOption.REPLACE_EXISTING,
+            )
+        } catch (_: Exception) {
+            Files.move(pendingFile.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
+        }
+        return target
     }
 
     private fun load(directory: File): StoryBook? = runCatching {
