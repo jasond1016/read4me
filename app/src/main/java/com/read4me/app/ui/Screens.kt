@@ -81,6 +81,7 @@ import com.read4me.app.model.StoryBook
 import com.read4me.app.model.StoryBookEditor
 import com.read4me.app.model.StorySpread
 import com.read4me.app.vision.CameraFrameAnalyzer
+import com.read4me.app.vision.LayeredSearchPlanner
 import com.read4me.app.vision.OrbPageMatcher
 import com.read4me.app.vision.PageTurnDetector
 import com.read4me.app.vision.VisualFingerprint
@@ -92,6 +93,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.ln
 
 @Composable
@@ -551,6 +553,7 @@ fun ChildReadingScreen(books: List<StoryBook>, onExit: () -> Unit) {
         }
     }
     val orbMatcher = remember(orbReferences) { OrbPageMatcher(orbReferences) }
+    val recognitionContext = remember { AtomicReference<LayeredSearchPlanner.Context?>(null) }
     var currentBook by remember { mutableStateOf<StoryBook?>(null) }
     var currentSpread by remember { mutableStateOf<StorySpread?>(null) }
     var status by remember {
@@ -581,6 +584,7 @@ fun ChildReadingScreen(books: List<StoryBook>, onExit: () -> Unit) {
         pausedForPageChange = false
         currentBook = book
         currentSpread = spread
+        recognitionContext.set(LayeredSearchPlanner.Context(book.id, spread.ordinal))
         inliers = geometricInliers
         isPlaying = true
         status = "正在讲第 ${spread.ordinal} 个书面"
@@ -604,11 +608,12 @@ fun ChildReadingScreen(books: List<StoryBook>, onExit: () -> Unit) {
     DisposableEffect(controller, lifecycleOwner, orbMatcher) {
         controller.bindToLifecycle(lifecycleOwner)
         val analyzer = CameraFrameAnalyzer(detector) { result, _, grayFrame ->
+            val evaluatedContext = recognitionContext.get()
             val decision = if (result.isMoving) {
                 orbMatcher.requireReconfirmation()
                 null
             } else {
-                orbMatcher.evaluate(grayFrame)
+                orbMatcher.evaluate(grayFrame, evaluatedContext)
             }
             mainExecutor.execute {
                 isMoving = result.isMoving
@@ -621,9 +626,10 @@ fun ChildReadingScreen(books: List<StoryBook>, onExit: () -> Unit) {
                     }
                     status = "看到你翻页了，正在确认新书面……"
                 }
-                if (decision != null) diagnostic = recognitionDiagnostic(decision)
-                if (decision != null && !isPlaying && !result.pageTurned) {
-                    status = when (decision.state) {
+                val currentDecision = decision?.takeIf { recognitionContext.get() == evaluatedContext }
+                if (currentDecision != null) diagnostic = recognitionDiagnostic(currentDecision)
+                if (currentDecision != null && !isPlaying && !result.pageTurned) {
+                    status = when (currentDecision.state) {
                         OrbPageMatcher.State.NO_REFERENCES -> "没有可识别的参考照片"
                         OrbPageMatcher.State.TOO_FEW_FEATURES -> "画面细节太少，请把书放进白框"
                         OrbPageMatcher.State.LOW_INLIERS -> "还没对准，再放稳一点"
@@ -632,7 +638,7 @@ fun ChildReadingScreen(books: List<StoryBook>, onExit: () -> Unit) {
                         else -> status
                     }
                 }
-                decision?.confirmed?.let {
+                currentDecision?.confirmed?.let {
                     spreadsByKey[it.reference.key]?.let { (book, spread) ->
                         val isCurrentSpread = currentBook?.id == book.id && currentSpread?.ordinal == spread.ordinal
                         when {
@@ -1418,5 +1424,11 @@ private fun recognitionDiagnostic(decision: OrbPageMatcher.Decision): String {
         OrbPageMatcher.State.NO_REFERENCES -> "没有参考照片"
         OrbPageMatcher.State.TOO_FEW_FEATURES -> "画面特征太少"
     }
-    return "$bestText$secondText · $state"
+    val path = when (decision.searchPath) {
+        OrbPageMatcher.SearchPath.NONE -> "未搜索"
+        OrbPageMatcher.SearchPath.ADJACENT -> "邻页快查"
+        OrbPageMatcher.SearchPath.LIBRARY -> "全库查找"
+    }
+    val search = "索引 ${decision.indexedReferences} · 几何 ${decision.geometricallyVerified} · $path"
+    return "$bestText$secondText · $state · $search"
 }

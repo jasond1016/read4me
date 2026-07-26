@@ -38,6 +38,7 @@ class OrbPageMatcher(
     )
 
     enum class State { NO_REFERENCES, TOO_FEW_FEATURES, LOW_INLIERS, AMBIGUOUS, CONFIRMING, CONFIRMED, STABLE }
+    enum class SearchPath { NONE, ADJACENT, LIBRARY }
 
     data class Decision(
         val confirmed: Score?,
@@ -46,6 +47,9 @@ class OrbPageMatcher(
         val state: State,
         val confirmationCount: Int,
         val confirmationsRequired: Int,
+        val indexedReferences: Int,
+        val geometricallyVerified: Int,
+        val searchPath: SearchPath,
     )
 
     private data class IndexedReference(
@@ -57,19 +61,44 @@ class OrbPageMatcher(
     private val orb: ORB
     private val matcher: DescriptorMatcher
     private val index: List<IndexedReference>
+    private val candidatesByKey: Map<String, IndexedReference>
+    private val plannedCandidates: List<LayeredSearchPlanner.Candidate>
     private var pendingKey: String? = null
     private var pendingCount = 0
     private var confirmedKey: String? = null
+    private var lastContext: LayeredSearchPlanner.Context? = null
 
     init {
         check(OpenCVLoader.initLocal()) { "OpenCV failed to initialize" }
         orb = ORB.create(1_400, 1.2f, 8, 19, 0, 2, ORB.HARRIS_SCORE, 31, 12)
         matcher = DescriptorMatcher.create(DescriptorMatcher.BRUTEFORCE_HAMMING)
-        index = references.mapNotNull(::indexReference)
+        val built = mutableListOf<IndexedReference>()
+        try {
+            references.mapNotNullTo(built, ::indexReference)
+            index = built
+            candidatesByKey = index.associateBy { it.reference.key }
+            plannedCandidates = index.map { it.planningCandidate() }
+        } catch (error: Throwable) {
+            built.forEach {
+                it.keypoints.release()
+                it.descriptors.release()
+            }
+            orb.clear()
+            matcher.clear()
+            throw error
+        }
     }
 
-    fun evaluate(frame: CameraFrameAnalyzer.GrayFrame): Decision {
-        if (index.isEmpty()) return decision(null, null, State.NO_REFERENCES)
+    fun evaluate(
+        frame: CameraFrameAnalyzer.GrayFrame,
+        context: LayeredSearchPlanner.Context? = null,
+    ): Decision {
+        if (context != lastContext) {
+            resetPending()
+            confirmedKey = null
+            lastContext = context
+        }
+        if (index.isEmpty()) return decision(null, null, State.NO_REFERENCES, 0, SearchPath.NONE)
         val image = Mat(frame.height, frame.width, CvType.CV_8UC1).apply { put(0, 0, frame.pixels) }
         val queryKeypoints = MatOfKeyPoint()
         val queryDescriptors = Mat()
@@ -78,12 +107,51 @@ class OrbPageMatcher(
             orb.detectAndCompute(image, mask, queryKeypoints, queryDescriptors)
             if (queryDescriptors.empty() || queryKeypoints.rows() < 12) {
                 resetPending()
-                decision(null, null, State.TOO_FEW_FEATURES)
+                decision(null, null, State.TOO_FEW_FEATURES, 0, SearchPath.NONE)
             } else {
-                val scores = index
-                    .map { score(queryKeypoints, queryDescriptors, it) }
+                val adjacent = LayeredSearchPlanner.adjacent(context, plannedCandidates)
+                    .mapNotNull { candidatesByKey[it.key] }
+                val adjacentScores = adjacent
+                    .map { score(queryKeypoints, it, ratioMatches(queryDescriptors, it)) }
                     .sortedWith(compareByDescending<Score> { it.inliers }.thenByDescending { it.goodMatches })
-                confirm(scores.firstOrNull(), scores.getOrNull(1))
+                val adjacentBest = adjacentScores.firstOrNull()
+                val adjacentSecond = adjacentScores.getOrNull(1)
+                val strongAdjacent = adjacentBest != null &&
+                    adjacentBest.inliers >= minimumInliers + 8 &&
+                    (adjacentSecond == null || adjacentBest.inliers - adjacentSecond.inliers >= minimumInlierMargin + 4)
+                if (strongAdjacent) {
+                    confirm(
+                        adjacentBest,
+                        adjacentSecond,
+                        adjacentScores.count { it.goodMatches >= 4 },
+                        SearchPath.ADJACENT,
+                    )
+                } else {
+                    val adjacentByKey = adjacentScores.associateBy { it.reference.key }
+                    val cheap = LayeredSearchPlanner.libraryCandidates(plannedCandidates).mapNotNull { candidate ->
+                        candidatesByKey[candidate.key]?.let { indexed ->
+                            val goodMatches = adjacentByKey[candidate.key]?.goodMatches
+                                ?: ratioMatches(queryDescriptors, indexed).size
+                            LayeredSearchPlanner.CheapScore(candidate, goodMatches)
+                        }
+                    }
+                    val shortlist = LayeredSearchPlanner.shortlist(cheap)
+                    val finalists = LayeredSearchPlanner.finalists(
+                        adjacentScores.map { it.reference.planningCandidate() },
+                        shortlist,
+                    )
+                    val scores = finalists.mapNotNull { candidate ->
+                        adjacentByKey[candidate.key] ?: candidatesByKey[candidate.key]?.let {
+                            score(queryKeypoints, it, ratioMatches(queryDescriptors, it))
+                        }
+                    }.sortedWith(compareByDescending<Score> { it.inliers }.thenByDescending { it.goodMatches })
+                    confirm(
+                        scores.firstOrNull(),
+                        scores.getOrNull(1),
+                        scores.count { it.goodMatches >= 4 },
+                        SearchPath.LIBRARY,
+                    )
+                }
             }
         } finally {
             image.release()
@@ -98,7 +166,7 @@ class OrbPageMatcher(
         confirmedKey = null
     }
 
-    private fun confirm(best: Score?, second: Score?): Decision {
+    private fun confirm(best: Score?, second: Score?, verified: Int, searchPath: SearchPath): Decision {
         val rejection = when {
             best == null -> State.NO_REFERENCES
             best.inliers < minimumInliers -> State.LOW_INLIERS
@@ -107,7 +175,7 @@ class OrbPageMatcher(
         }
         if (rejection != null) {
             resetPending()
-            return decision(best, second, rejection)
+            return decision(best, second, rejection, verified, searchPath)
         }
 
         checkNotNull(best)
@@ -115,32 +183,40 @@ class OrbPageMatcher(
             pendingKey = best.reference.key
             pendingCount = 1
         }
-        if (confirmedKey == best.reference.key) return decision(best, second, State.STABLE)
-        if (pendingCount < confirmationsRequired) return decision(best, second, State.CONFIRMING)
+        if (confirmedKey == best.reference.key) return decision(best, second, State.STABLE, verified, searchPath)
+        if (pendingCount < confirmationsRequired) return decision(best, second, State.CONFIRMING, verified, searchPath)
         confirmedKey = best.reference.key
-        return Decision(best, best, second, State.CONFIRMED, pendingCount, confirmationsRequired)
+        return Decision(best, best, second, State.CONFIRMED, pendingCount, confirmationsRequired, index.size, verified, searchPath)
+    }
+
+    private data class MatchIndices(val query: Int, val train: Int)
+
+    private fun ratioMatches(queryDescriptors: Mat, reference: IndexedReference): List<MatchIndices> {
+        val pairs = ArrayList<MatOfDMatch>()
+        return try {
+            matcher.knnMatch(queryDescriptors, reference.descriptors, pairs, 2)
+            pairs.mapNotNull { pair ->
+                val matches = pair.toArray()
+                matches.getOrNull(0)?.takeIf { first ->
+                    matches.getOrNull(1)?.let { second -> first.distance < 0.75f * second.distance } == true
+                }?.let { MatchIndices(it.queryIdx, it.trainIdx) }
+            }
+        } finally {
+            pairs.forEach(MatOfDMatch::release)
+        }
     }
 
     private fun score(
         queryKeypoints: MatOfKeyPoint,
-        queryDescriptors: Mat,
         reference: IndexedReference,
+        good: List<MatchIndices>,
     ): Score {
-        val pairs = ArrayList<MatOfDMatch>()
-        matcher.knnMatch(queryDescriptors, reference.descriptors, pairs, 2)
-        val good = pairs.mapNotNull { pair ->
-            val matches = pair.toArray()
-            pair.release()
-            matches.getOrNull(0)?.takeIf { first ->
-                matches.getOrNull(1)?.let { second -> first.distance < 0.75f * second.distance } == true
-            }
-        }
         if (good.size < 4) return Score(reference.reference, good.size, 0)
 
         val queryPoints = queryKeypoints.toArray()
         val referencePoints = reference.keypoints.toArray()
-        val source = MatOfPoint2f(*good.map { queryPoints[it.queryIdx].pt }.toTypedArray())
-        val target = MatOfPoint2f(*good.map { referencePoints[it.trainIdx].pt }.toTypedArray())
+        val source = MatOfPoint2f(*good.map { queryPoints[it.query].pt }.toTypedArray())
+        val target = MatOfPoint2f(*good.map { referencePoints[it.train].pt }.toTypedArray())
         val mask = Mat()
         return try {
             val homography = Calib3d.findHomography(source, target, Calib3d.RANSAC, 4.0, mask)
@@ -160,32 +236,34 @@ class OrbPageMatcher(
             original.release()
             return null
         }
-        val image = if (maxOf(original.width(), original.height()) > 720) {
-            val scale = 720.0 / maxOf(original.width(), original.height())
-            Mat().also { Imgproc.resize(original, it, Size(), scale, scale, Imgproc.INTER_AREA) }
-        } else {
-            original
-        }
         val keypoints = MatOfKeyPoint()
         val descriptors = Mat()
         val mask = Mat()
+        var resized: Mat? = null
+        var transferred = false
         try {
+            val image = if (maxOf(original.width(), original.height()) > 720) {
+                val scale = 720.0 / maxOf(original.width(), original.height())
+                Mat().also {
+                    resized = it
+                    Imgproc.resize(original, it, Size(), scale, scale, Imgproc.INTER_AREA)
+                }
+            } else {
+                original
+            }
             orb.detectAndCompute(image, mask, keypoints, descriptors)
-        } catch (error: Throwable) {
-            keypoints.release()
-            descriptors.release()
-            throw error
+            if (descriptors.empty()) return null
+            transferred = true
+            return IndexedReference(reference, keypoints, descriptors)
         } finally {
             mask.release()
-            if (image !== original) image.release()
+            resized?.release()
             original.release()
+            if (!transferred) {
+                keypoints.release()
+                descriptors.release()
+            }
         }
-        if (descriptors.empty()) {
-            keypoints.release()
-            descriptors.release()
-            return null
-        }
-        return IndexedReference(reference, keypoints, descriptors)
     }
 
     private fun resetPending() {
@@ -193,8 +271,16 @@ class OrbPageMatcher(
         pendingCount = 0
     }
 
-    private fun decision(best: Score?, second: Score?, state: State) =
-        Decision(null, best, second, state, pendingCount, confirmationsRequired)
+    private fun decision(best: Score?, second: Score?, state: State, verified: Int, searchPath: SearchPath) =
+        Decision(null, best, second, state, pendingCount, confirmationsRequired, index.size, verified, searchPath)
+
+    private fun Reference.planningCandidate() = LayeredSearchPlanner.Candidate(key, bookId, spreadOrdinal)
+
+    private fun IndexedReference.planningCandidate() = LayeredSearchPlanner.Candidate(
+        reference.key,
+        reference.bookId,
+        reference.spreadOrdinal,
+    )
 
     override fun close() {
         index.forEach {
