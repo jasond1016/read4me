@@ -100,6 +100,9 @@ fun LibraryScreen(
     onCreateBook: () -> Unit,
     onChildMode: () -> Unit,
     onOpenBook: (StoryBook) -> Unit,
+    archiveMessage: String?,
+    onImport: () -> Unit,
+    onExport: (StoryBook) -> Unit,
 ) {
     Surface(Modifier.fillMaxSize(), color = Paper) {
         LazyColumn(
@@ -126,6 +129,15 @@ fun LibraryScreen(
                 }
             }
 
+            item {
+                OutlinedButton(onClick = onImport, modifier = Modifier.fillMaxWidth()) {
+                    Text("导入 / 恢复绘本")
+                }
+                archiveMessage?.let {
+                    Text(it, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 6.dp))
+                }
+            }
+
             if (books.isNotEmpty()) {
                 item {
                     OutlinedButton(
@@ -149,7 +161,11 @@ fun LibraryScreen(
                     )
                 }
                 items(books, key = { it.id }) { book ->
-                    BookCard(book = book, onClick = { onOpenBook(book) })
+                    BookCard(
+                        book = book,
+                        onClick = { onOpenBook(book) },
+                        onExport = { onExport(book) },
+                    )
                 }
             }
         }
@@ -197,7 +213,7 @@ private fun StepPebble(number: String, label: String) {
 }
 
 @Composable
-private fun BookCard(book: StoryBook, onClick: () -> Unit) {
+private fun BookCard(book: StoryBook, onClick: () -> Unit, onExport: () -> Unit) {
     Card(
         onClick = onClick,
         shape = RoundedCornerShape(22.dp),
@@ -217,6 +233,9 @@ private fun BookCard(book: StoryBook, onClick: () -> Unit) {
                     color = Ink.copy(alpha = 0.62f),
                     modifier = Modifier.padding(top = 6.dp),
                 )
+                TextButton(onClick = onExport, contentPadding = PaddingValues(0.dp)) {
+                    Text("导出备份", style = MaterialTheme.typography.labelMedium)
+                }
             }
             Text("›", style = MaterialTheme.typography.headlineLarge, color = Coral)
         }

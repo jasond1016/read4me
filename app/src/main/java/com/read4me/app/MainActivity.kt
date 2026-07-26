@@ -7,9 +7,11 @@ import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import com.read4me.app.data.StoryRepository
@@ -22,6 +24,9 @@ import com.read4me.app.ui.RecaptureScreen
 import com.read4me.app.ui.ReviewScreen
 import com.read4me.app.ui.SetupScreen
 import com.read4me.app.ui.ChildReadingScreen
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
     private sealed interface Destination {
@@ -45,6 +50,38 @@ class MainActivity : ComponentActivity() {
                 var books by remember { mutableStateOf(repository.loadAll()) }
                 var permissionTarget: Destination? by remember { mutableStateOf(null) }
                 var permissionMessage by remember { mutableStateOf<String?>(null) }
+                var archiveMessage by remember { mutableStateOf<String?>(null) }
+                var exportBook by remember { mutableStateOf<StoryBook?>(null) }
+                val scope = rememberCoroutineScope()
+
+                val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+                    if (uri != null) scope.launch {
+                        archiveMessage = runCatching {
+                            val refreshed = withContext(Dispatchers.IO) {
+                                contentResolver.openInputStream(uri)?.use(repository::import)
+                                    ?: error("Cannot open the selected file")
+                                repository.loadAll()
+                            }
+                            books = refreshed
+                            "绘本已导入"
+                        }.getOrElse { "导入失败：${it.message ?: "备份文件无效"}" }
+                    }
+                }
+                val exportLauncher = rememberLauncherForActivityResult(
+                    ActivityResultContracts.CreateDocument("application/zip"),
+                ) { uri ->
+                    val book = exportBook
+                    exportBook = null
+                    if (uri != null && book != null) scope.launch {
+                        archiveMessage = runCatching {
+                            withContext(Dispatchers.IO) {
+                                contentResolver.openOutputStream(uri)?.use { repository.export(book, it) }
+                                    ?: error("Cannot create the backup")
+                            }
+                            "绘本备份已导出"
+                        }.getOrElse { "导出失败：${it.message ?: "无法写入文件"}" }
+                    }
+                }
 
                 val permissionLauncher = rememberLauncher { granted ->
                     if (granted) {
@@ -74,6 +111,13 @@ class MainActivity : ComponentActivity() {
                             }
                         },
                         onOpenBook = { destination = Destination.Review(it) },
+                        archiveMessage = archiveMessage,
+                        onImport = { importLauncher.launch(arrayOf("application/zip", "application/octet-stream")) },
+                        onExport = { book ->
+                            exportBook = book
+                            val safeTitle = book.title.replace(Regex("[^A-Za-z0-9._-]"), "_").take(40)
+                            exportLauncher.launch("${safeTitle.ifBlank { "book" }}.read4me")
+                        },
                     )
 
                     Destination.ChildReading -> ChildReadingScreen(

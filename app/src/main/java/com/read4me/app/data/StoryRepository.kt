@@ -8,6 +8,8 @@ import com.read4me.app.model.StoryBook
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.io.InputStream
+import java.io.OutputStream
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.util.UUID
@@ -77,6 +79,43 @@ class StoryRepository(context: Context) {
         .orEmpty()
         .mapNotNull(::load)
         .sortedByDescending { it.directory.lastModified() }
+
+    fun export(book: StoryBook, output: OutputStream) = BookArchive.export(book.directory, output)
+
+    fun import(input: InputStream): StoryBook {
+        val temporary = File(booksDirectory, ".import-${UUID.randomUUID()}")
+        val id = UUID.randomUUID().toString()
+        val target = File(booksDirectory, id)
+        try {
+            check(temporary.mkdirs()) { "Could not prepare import" }
+            BookArchive.extract(input, temporary)
+            val imported = load(temporary) ?: error("Book manifest is invalid")
+            validateFiles(imported)
+            val manifestFile = File(temporary, "manifest.json")
+            val manifest = JSONObject(manifestFile.readText()).put("id", id)
+            manifestFile.writeText(manifest.toString(2))
+            check(!target.exists())
+            try {
+                Files.move(temporary.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE)
+            } catch (_: Exception) {
+                Files.move(temporary.toPath(), target.toPath())
+            }
+            return load(target) ?: error("Imported book could not be loaded")
+        } catch (failure: Exception) {
+            temporary.deleteRecursively()
+            target.deleteRecursively()
+            throw failure
+        }
+    }
+
+    private fun validateFiles(book: StoryBook) {
+        require(book.audioFile.isFile) { "Recording is missing" }
+        require(book.markers.isNotEmpty()) { "Book has no spreads" }
+        require(book.markers.all { it.imageFile?.isFile == true }) { "A spread image is missing" }
+        require(book.markers.all { it.overrideAudioFile == null || it.overrideAudioFile.isFile }) {
+            "An override recording is missing"
+        }
+    }
 
     fun deleteDraft(draft: Draft) {
         draft.directory.deleteRecursively()
