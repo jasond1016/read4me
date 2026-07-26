@@ -11,6 +11,7 @@ import androidx.camera.view.PreviewView
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -27,6 +28,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -59,6 +62,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
@@ -498,7 +502,6 @@ fun RecordingScreen(
 
 @Composable
 fun ChildReadingScreen(books: List<StoryBook>, onExit: () -> Unit) {
-    BackHandler(onBack = onExit)
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val mainExecutor = remember { ContextCompat.getMainExecutor(context) }
@@ -538,6 +541,16 @@ fun ChildReadingScreen(books: List<StoryBook>, onExit: () -> Unit) {
     var diagnostic by remember { mutableStateOf("等待第一组稳定画面") }
     var choosingManualSpread by remember { mutableStateOf(false) }
     var manualCorrection by remember { mutableStateOf(false) }
+    var parentMode by remember { mutableStateOf(false) }
+
+    BackHandler {
+        if (parentMode) {
+            parentMode = false
+            choosingManualSpread = false
+        } else {
+            parentMode = true
+        }
+    }
 
     fun play(book: StoryBook, spread: StorySpread, geometricInliers: Int) {
         player.stop()
@@ -642,15 +655,19 @@ fun ChildReadingScreen(books: List<StoryBook>, onExit: () -> Unit) {
                 BookGuideFrame(active = isMoving, modifier = Modifier.align(Alignment.Center))
             }
 
-            OutlinedButton(
-                onClick = onExit,
-                colors = ButtonDefaults.outlinedButtonColors(
-                    containerColor = Ink.copy(alpha = 0.78f),
-                    contentColor = Color.White,
-                ),
-                shape = RoundedCornerShape(16.dp),
-                modifier = Modifier.align(Alignment.TopStart).padding(18.dp),
-            ) { Text("退出") }
+            Text(
+                "家长",
+                color = Color.White.copy(alpha = 0.62f),
+                style = MaterialTheme.typography.labelMedium,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(18.dp)
+                    .background(Ink.copy(alpha = 0.38f), RoundedCornerShape(12.dp))
+                    .pointerInput(Unit) {
+                        detectTapGestures(onLongPress = { parentMode = true })
+                    }
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+            )
 
             Surface(
                 color = Paper.copy(alpha = 0.96f),
@@ -671,26 +688,12 @@ fun ChildReadingScreen(books: List<StoryBook>, onExit: () -> Unit) {
                     )
                     currentBook?.let {
                         Text(
-                            "${it.title} · 几何内点 $inliers",
+                            "《${it.title}》 · 第 ${currentSpread?.ordinal ?: "-"} 个书面",
                             style = MaterialTheme.typography.bodyMedium,
                             color = Ink.copy(alpha = 0.58f),
                             modifier = Modifier.padding(top = 5.dp),
                         )
                     }
-                    if (manualCorrection) {
-                        Text(
-                            "已由家长手动纠正",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = Coral,
-                            modifier = Modifier.padding(top = 5.dp),
-                        )
-                    }
-                    Text(
-                        diagnostic,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = Ink.copy(alpha = 0.52f),
-                        modifier = Modifier.padding(top = 5.dp),
-                    )
                     currentSpread?.let { spread ->
                         Row(
                             Modifier.fillMaxWidth().padding(top = 16.dp),
@@ -717,30 +720,63 @@ fun ChildReadingScreen(books: List<StoryBook>, onExit: () -> Unit) {
                             ) { Text("重新播放") }
                         }
                     }
-                    TextButton(onClick = { choosingManualSpread = !choosingManualSpread }) {
-                        Text(if (choosingManualSpread) "收起手动纠正" else "家长手动纠正识别")
-                    }
-                    if (choosingManualSpread) {
-                        val choices = currentBook?.let(::listOf) ?: books
+                }
+            }
+
+            if (parentMode) {
+                Surface(
+                    color = Paper,
+                    shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+                    modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth(),
+                ) {
+                    Column(Modifier.padding(horizontal = 20.dp, vertical = 16.dp)) {
+                        Text("家长诊断", style = MaterialTheme.typography.titleLarge)
                         Text(
-                            if (currentBook != null) "选择《${currentBook?.title}》的实际书面" else "选择实际绘本和书面",
+                            "绘本：${currentBook?.title ?: "未识别"}　书面：${currentSpread?.ordinal ?: "-"}　几何内点：$inliers",
                             style = MaterialTheme.typography.bodyMedium,
-                            color = Ink.copy(alpha = 0.62f),
+                            modifier = Modifier.padding(top = 8.dp),
                         )
-                        choices.forEach { choiceBook ->
+                        Text(
+                            diagnostic,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Ink.copy(alpha = 0.62f),
+                            modifier = Modifier.padding(top = 4.dp),
+                        )
+                        if (manualCorrection) {
+                            Text("当前识别已手动纠正", color = Coral, style = MaterialTheme.typography.labelMedium)
+                        }
+                        TextButton(onClick = { choosingManualSpread = !choosingManualSpread }) {
+                            Text(if (choosingManualSpread) "收起纠正选项" else "手动纠正识别")
+                        }
+                        if (choosingManualSpread) {
                             Row(
-                                Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.Center,
+                                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
                             ) {
-                                choiceBook.spreads.forEach { choiceSpread ->
-                                    TextButton(onClick = {
-                                        manualCorrection = true
-                                        choosingManualSpread = false
-                                        play(choiceBook, choiceSpread, 0)
-                                        status = "手动纠正：正在讲《${choiceBook.title}》书面 ${choiceSpread.ordinal}"
-                                    }) { Text("${choiceBook.title} ${choiceSpread.ordinal}") }
+                                books.forEach { choiceBook ->
+                                    choiceBook.spreads.forEach { choiceSpread ->
+                                        TextButton(
+                                            onClick = {
+                                                manualCorrection = true
+                                                choosingManualSpread = false
+                                                play(choiceBook, choiceSpread, 0)
+                                                status = "正在讲《${choiceBook.title}》第 ${choiceSpread.ordinal} 个书面"
+                                            },
+                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                        ) { Text("${choiceBook.title} ${choiceSpread.ordinal}", maxLines = 1) }
+                                    }
                                 }
                             }
+                        }
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            TextButton(onClick = onExit) { Text("退出阅读模式", color = Coral) }
+                            Button(
+                                onClick = {
+                                    parentMode = false
+                                    choosingManualSpread = false
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = Moss),
+                            ) { Text("关闭家长面板") }
                         }
                     }
                 }
