@@ -18,6 +18,9 @@ import java.util.UUID
 
 class StoryRepository(context: Context) {
     private val booksDirectory = File(context.filesDir, "books").apply { mkdirs() }
+    private val trashDirectory = File(context.filesDir, "trash").apply { mkdirs() }
+
+    data class TrashedBook(val book: StoryBook, val deletedAtMs: Long)
 
     data class Draft(
         val id: String,
@@ -93,10 +96,107 @@ class StoryRepository(context: Context) {
 
     fun loadAll(): List<StoryBook> = booksDirectory.listFiles()
         .orEmpty()
+        .filter { !it.name.startsWith('.') }
         .mapNotNull(::load)
         .sortedByDescending { it.directory.lastModified() }
 
+    fun rename(book: StoryBook, title: String): StoryBook {
+        val normalized = title.trim()
+        require(normalized.isNotEmpty()) { "Book title cannot be empty" }
+        return book.copy(title = normalized).also(::save)
+    }
+
+    fun moveToTrash(book: StoryBook, nowMs: Long = System.currentTimeMillis()) {
+        require(book.directory.parentFile?.canonicalFile == booksDirectory.canonicalFile)
+        val target = File(trashDirectory, book.id)
+        require(!target.exists()) { "Book is already in the recycle bin" }
+        moveDirectory(book.directory, target)
+        runCatching {
+            File(target, ".trash.json").writeText(JSONObject().put("deletedAtMs", nowMs).toString())
+        }.onFailure {
+            File(target, ".trash.json").delete()
+            moveDirectory(target, book.directory)
+            throw it
+        }
+    }
+
+    fun loadTrash(nowMs: Long = System.currentTimeMillis()): List<TrashedBook> {
+        purgeExpiredTrash(nowMs)
+        return trashDirectory.listFiles().orEmpty().mapNotNull { directory ->
+            val book = load(directory) ?: return@mapNotNull null
+            val deletedAt = runCatching {
+                JSONObject(File(directory, ".trash.json").readText()).getLong("deletedAtMs")
+            }.getOrDefault(directory.lastModified())
+            TrashedBook(book, deletedAt)
+        }.sortedByDescending(TrashedBook::deletedAtMs)
+    }
+
+    fun restore(trashed: TrashedBook): StoryBook {
+        val source = trashed.book.directory
+        require(source.parentFile?.canonicalFile == trashDirectory.canonicalFile)
+        var id = trashed.book.id
+        var target = File(booksDirectory, id)
+        val manifest = File(source, "manifest.json")
+        val originalManifest = manifest.readText()
+        if (target.exists()) {
+            id = UUID.randomUUID().toString()
+            target = File(booksDirectory, id)
+            manifest.writeText(JSONObject(manifest.readText()).put("id", id).toString(2))
+        }
+        try {
+            moveDirectory(source, target)
+        } catch (failure: Exception) {
+            if (source.exists()) manifest.writeText(originalManifest)
+            throw failure
+        }
+        File(target, ".trash.json").delete()
+        return load(target) ?: error("Restored book could not be loaded")
+    }
+
+    fun permanentlyDelete(trashed: TrashedBook) {
+        require(trashed.book.directory.parentFile?.canonicalFile == trashDirectory.canonicalFile)
+        require(trashed.book.directory.deleteRecursively()) { "Could not permanently delete book" }
+    }
+
+    fun purgeExpiredTrash(nowMs: Long = System.currentTimeMillis(), retentionMs: Long = 30L * 24 * 60 * 60 * 1000) {
+        trashDirectory.listFiles().orEmpty().forEach { directory ->
+            val deletedAt = runCatching {
+                JSONObject(File(directory, ".trash.json").readText()).getLong("deletedAtMs")
+            }.getOrDefault(directory.lastModified())
+            if (nowMs - deletedAt >= retentionMs) directory.deleteRecursively()
+        }
+    }
+
     fun export(book: StoryBook, output: OutputStream) = BookArchive.export(book.directory, output)
+
+    fun exportLibrary(output: OutputStream) = LibraryArchive.export(
+        loadAll().map(StoryBook::directory),
+        output,
+    )
+
+    fun importLibrary(input: InputStream): List<StoryBook> {
+        val staging = File(booksDirectory.parentFile, ".library-import-${UUID.randomUUID()}")
+        val published = mutableListOf<File>()
+        try {
+            check(staging.mkdirs()) { "Could not prepare library import" }
+            val extracted = LibraryArchive.extract(input, staging)
+            extracted.forEach { validateFiles(load(it) ?: error("Book manifest is invalid")) }
+            extracted.forEach { source ->
+                val id = UUID.randomUUID().toString()
+                val manifest = File(source, "manifest.json")
+                manifest.writeText(JSONObject(manifest.readText()).put("id", id).toString(2))
+                val target = File(booksDirectory, id)
+                moveDirectory(source, target)
+                published += target
+            }
+            return published.map { load(it) ?: error("Imported book could not be loaded") }
+        } catch (failure: Exception) {
+            published.forEach(File::deleteRecursively)
+            throw failure
+        } finally {
+            staging.deleteRecursively()
+        }
+    }
 
     fun import(input: InputStream): StoryBook {
         val temporary = File(booksDirectory, ".import-${UUID.randomUUID()}")
@@ -125,12 +225,21 @@ class StoryRepository(context: Context) {
     }
 
     private fun validateFiles(book: StoryBook) {
-        require(book.audioFile.isFile) { "Recording is missing" }
+        val root = book.directory.canonicalFile
+        fun isContained(file: File): Boolean {
+            val canonical = file.canonicalFile
+            return canonical.path.startsWith(root.path + File.separator)
+        }
+        require(isContained(book.audioFile) && book.audioFile.isFile) { "Recording is missing or unsafe" }
         require(book.markers.isNotEmpty()) { "Book has no spreads" }
         require(book.markers.all { it.references.isNotEmpty() }) { "A spread has no reference images" }
-        require(book.markers.all { marker -> marker.references.all { it.file.isFile } }) { "A spread image is missing" }
-        require(book.markers.all { it.overrideAudioFile == null || it.overrideAudioFile.isFile }) {
-            "An override recording is missing"
+        require(book.markers.all { marker -> marker.references.all { isContained(it.file) && it.file.isFile } }) {
+            "A spread image is missing or unsafe"
+        }
+        require(book.markers.all {
+            it.overrideAudioFile == null || isContained(it.overrideAudioFile) && it.overrideAudioFile.isFile
+        }) {
+            "An override recording is missing or unsafe"
         }
     }
 
@@ -283,5 +392,15 @@ class StoryRepository(context: Context) {
 
     fun overrideAudioFile(book: StoryBook, spreadId: String): File =
         File(File(book.directory, "overrides").apply { mkdirs() }, "$spreadId.m4a")
+
+    private fun moveDirectory(source: File, target: File) {
+        require(source.exists() && !target.exists())
+        target.parentFile?.mkdirs()
+        try {
+            Files.move(source.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE)
+        } catch (_: Exception) {
+            Files.move(source.toPath(), target.toPath())
+        }
+    }
 
 }

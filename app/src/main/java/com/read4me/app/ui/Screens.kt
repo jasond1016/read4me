@@ -105,12 +105,19 @@ import kotlin.math.ln
 @Composable
 fun LibraryScreen(
     books: List<StoryBook>,
+    trashedBooks: List<StoryRepository.TrashedBook>,
     onCreateBook: () -> Unit,
     onChildMode: () -> Unit,
     onOpenBook: (StoryBook) -> Unit,
     archiveMessage: String?,
     onImport: () -> Unit,
     onExport: (StoryBook) -> Unit,
+    onRename: (StoryBook, String) -> Unit,
+    onMoveToTrash: (StoryBook) -> Unit,
+    onRestore: (StoryRepository.TrashedBook) -> Unit,
+    onPermanentlyDelete: (StoryRepository.TrashedBook) -> Unit,
+    onImportLibrary: () -> Unit,
+    onExportLibrary: () -> Unit,
 ) {
     Surface(Modifier.fillMaxSize(), color = Paper) {
         LazyColumn(
@@ -140,6 +147,17 @@ fun LibraryScreen(
             item {
                 OutlinedButton(onClick = onImport, modifier = Modifier.fillMaxWidth()) {
                     Text("导入 / 恢复绘本")
+                }
+                Row(
+                    Modifier.fillMaxWidth().padding(top = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    OutlinedButton(onClick = onExportLibrary, modifier = Modifier.weight(1f)) {
+                        Text("导出整库")
+                    }
+                    OutlinedButton(onClick = onImportLibrary, modifier = Modifier.weight(1f)) {
+                        Text("恢复整库")
+                    }
                 }
                 archiveMessage?.let {
                     Text(it, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 6.dp))
@@ -173,6 +191,22 @@ fun LibraryScreen(
                         book = book,
                         onClick = { onOpenBook(book) },
                         onExport = { onExport(book) },
+                        onRename = { onRename(book, it) },
+                        onMoveToTrash = { onMoveToTrash(book) },
+                    )
+                }
+            }
+
+            if (trashedBooks.isNotEmpty()) {
+                item {
+                    Text("回收站", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.padding(top = 12.dp))
+                    Text("保留 30 天后自动永久删除", style = MaterialTheme.typography.bodyMedium, color = Ink.copy(alpha = .58f))
+                }
+                items(trashedBooks, key = { it.book.id }) { trashed ->
+                    TrashBookCard(
+                        trashed = trashed,
+                        onRestore = { onRestore(trashed) },
+                        onPermanentlyDelete = { onPermanentlyDelete(trashed) },
                     )
                 }
             }
@@ -221,7 +255,16 @@ private fun StepPebble(number: String, label: String) {
 }
 
 @Composable
-private fun BookCard(book: StoryBook, onClick: () -> Unit, onExport: () -> Unit) {
+private fun BookCard(
+    book: StoryBook,
+    onClick: () -> Unit,
+    onExport: () -> Unit,
+    onRename: (String) -> Unit,
+    onMoveToTrash: () -> Unit,
+) {
+    var showRename by remember { mutableStateOf(false) }
+    var showDelete by remember { mutableStateOf(false) }
+    var title by remember(book.title) { mutableStateOf(book.title) }
     Card(
         onClick = onClick,
         shape = RoundedCornerShape(22.dp),
@@ -244,10 +287,64 @@ private fun BookCard(book: StoryBook, onClick: () -> Unit, onExport: () -> Unit)
                 TextButton(onClick = onExport, contentPadding = PaddingValues(0.dp)) {
                     Text("导出备份", style = MaterialTheme.typography.labelMedium)
                 }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(onClick = { showRename = true }, contentPadding = PaddingValues(0.dp)) { Text("重命名") }
+                    TextButton(onClick = { showDelete = true }, contentPadding = PaddingValues(0.dp)) { Text("删除", color = Coral) }
+                }
             }
             Text("›", style = MaterialTheme.typography.headlineLarge, color = Coral)
         }
     }
+    if (showRename) AlertDialog(
+        onDismissRequest = { showRename = false },
+        title = { Text("重命名绘本") },
+        text = {
+            OutlinedTextField(value = title, onValueChange = { title = it }, singleLine = true, label = { Text("绘本名称") })
+        },
+        confirmButton = {
+            TextButton(enabled = title.isNotBlank(), onClick = { showRename = false; onRename(title) }) { Text("保存") }
+        },
+        dismissButton = { TextButton(onClick = { showRename = false }) { Text("取消") } },
+    )
+    if (showDelete) AlertDialog(
+        onDismissRequest = { showDelete = false },
+        title = { Text("移到回收站？") },
+        text = { Text("录音和照片会保留 30 天，可以从回收站恢复。") },
+        confirmButton = { TextButton(onClick = { showDelete = false; onMoveToTrash() }) { Text("移到回收站", color = Coral) } },
+        dismissButton = { TextButton(onClick = { showDelete = false }) { Text("取消") } },
+    )
+}
+
+@Composable
+private fun TrashBookCard(
+    trashed: StoryRepository.TrashedBook,
+    onRestore: () -> Unit,
+    onPermanentlyDelete: () -> Unit,
+) {
+    var confirmPermanentDelete by remember { mutableStateOf(false) }
+    Card(shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = SoftWhite)) {
+        Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(trashed.book.title, style = MaterialTheme.typography.titleLarge)
+                Text(
+                    "删除于 ${SimpleDateFormat("M月d日", Locale.CHINA).format(Date(trashed.deletedAtMs))}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Ink.copy(alpha = .58f),
+                )
+            }
+            TextButton(onClick = onRestore) { Text("恢复") }
+            TextButton(onClick = { confirmPermanentDelete = true }) { Text("永久删除", color = Coral) }
+        }
+    }
+    if (confirmPermanentDelete) AlertDialog(
+        onDismissRequest = { confirmPermanentDelete = false },
+        title = { Text("永久删除这本绘本？") },
+        text = { Text("所有录音和照片都会被删除，且无法恢复。") },
+        confirmButton = {
+            TextButton(onClick = { confirmPermanentDelete = false; onPermanentlyDelete() }) { Text("永久删除", color = Coral) }
+        },
+        dismissButton = { TextButton(onClick = { confirmPermanentDelete = false }) { Text("取消") } },
+    )
 }
 
 @Composable

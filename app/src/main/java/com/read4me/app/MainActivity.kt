@@ -55,6 +55,7 @@ class MainActivity : ComponentActivity() {
             Read4MeTheme {
                 var destination: Destination by remember { mutableStateOf(Destination.Library) }
                 var books by remember { mutableStateOf(repository.loadAll()) }
+                var trashedBooks by remember { mutableStateOf(repository.loadTrash()) }
                 var permissionTarget: Destination? by remember { mutableStateOf(null) }
                 var permissionMessage by remember { mutableStateOf<String?>(null) }
                 var archiveMessage by remember { mutableStateOf<String?>(null) }
@@ -89,6 +90,32 @@ class MainActivity : ComponentActivity() {
                         }.getOrElse { "导出失败：${it.message ?: "无法写入文件"}" }
                     }
                 }
+                val libraryImportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+                    if (uri != null) scope.launch {
+                        archiveMessage = runCatching {
+                            withContext(Dispatchers.IO) {
+                                contentResolver.openInputStream(uri)?.use(repository::importLibrary)
+                                    ?: error("Cannot open the selected file")
+                            }
+                            books = repository.loadAll()
+                            trashedBooks = repository.loadTrash()
+                            "整库备份已恢复"
+                        }.getOrElse { "整库恢复失败：${it.message ?: "备份文件无效"}" }
+                    }
+                }
+                val libraryExportLauncher = rememberLauncherForActivityResult(
+                    ActivityResultContracts.CreateDocument("application/zip"),
+                ) { uri ->
+                    if (uri != null) scope.launch {
+                        archiveMessage = runCatching {
+                            withContext(Dispatchers.IO) {
+                                contentResolver.openOutputStream(uri)?.use(repository::exportLibrary)
+                                    ?: error("Cannot create the backup")
+                            }
+                            "整库备份已导出"
+                        }.getOrElse { "整库导出失败：${it.message ?: "无法写入文件"}" }
+                    }
+                }
 
                 val permissionLauncher = rememberLauncher { granted ->
                     if (granted) {
@@ -103,6 +130,7 @@ class MainActivity : ComponentActivity() {
                 when (val current = destination) {
                     Destination.Library -> LibraryScreen(
                         books = books,
+                        trashedBooks = trashedBooks,
                         onCreateBook = {
                             permissionMessage = null
                             destination = Destination.Setup
@@ -125,6 +153,40 @@ class MainActivity : ComponentActivity() {
                             val safeTitle = book.title.replace(Regex("[^A-Za-z0-9._-]"), "_").take(40)
                             exportLauncher.launch("${safeTitle.ifBlank { "book" }}.read4me")
                         },
+                        onRename = { book, title ->
+                            archiveMessage = runCatching {
+                                repository.rename(book, title)
+                                books = repository.loadAll()
+                                "绘本已重命名"
+                            }.getOrElse { "重命名失败：${it.message ?: "名称无效"}" }
+                        },
+                        onMoveToTrash = { book ->
+                            archiveMessage = runCatching {
+                                repository.moveToTrash(book)
+                                books = repository.loadAll()
+                                trashedBooks = repository.loadTrash()
+                                "绘本已移到回收站"
+                            }.getOrElse { "删除失败：${it.message ?: "无法移动绘本"}" }
+                        },
+                        onRestore = { trashed ->
+                            archiveMessage = runCatching {
+                                repository.restore(trashed)
+                                books = repository.loadAll()
+                                trashedBooks = repository.loadTrash()
+                                "绘本已恢复"
+                            }.getOrElse { "恢复失败：${it.message ?: "无法恢复绘本"}" }
+                        },
+                        onPermanentlyDelete = { trashed ->
+                            archiveMessage = runCatching {
+                                repository.permanentlyDelete(trashed)
+                                trashedBooks = repository.loadTrash()
+                                "绘本已永久删除"
+                            }.getOrElse { "永久删除失败：${it.message ?: "无法删除绘本"}" }
+                        },
+                        onImportLibrary = {
+                            libraryImportLauncher.launch(arrayOf("application/zip", "application/octet-stream"))
+                        },
+                        onExportLibrary = { libraryExportLauncher.launch("read4me-library.read4me-library") },
                     )
 
                     Destination.ChildReading -> ChildReadingScreen(
