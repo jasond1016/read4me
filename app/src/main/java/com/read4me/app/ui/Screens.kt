@@ -90,6 +90,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.read4me.app.audio.AudioSegmentPlayer
 import com.read4me.app.audio.PersistentWaveformCache
 import com.read4me.app.audio.StoryAudioRecorder
+import com.read4me.app.audio.WaveformMath
 import com.read4me.app.data.StoryRepository
 import com.read4me.app.model.MarkerSource
 import com.read4me.app.model.SpreadMarker
@@ -118,6 +119,7 @@ import java.util.Date
 import java.util.Locale
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.ln
 
@@ -873,6 +875,9 @@ fun ChildReadingScreen(
     }
     val orbMatcher = remember(orbReferences) { OrbPageMatcher(orbReferences) }
     val recognitionContext = remember { AtomicReference<LayeredSearchPlanner.Context?>(null) }
+    val recognitionGeneration = remember { AtomicLong(0L) }
+    val recognitionArmed = remember { AtomicBoolean(true) }
+    val lifecycleResumed = remember { AtomicBoolean(lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) }
     var currentBook by remember { mutableStateOf<StoryBook?>(null) }
     var currentSpread by remember { mutableStateOf<StorySpread?>(null) }
     var status by remember {
@@ -913,13 +918,23 @@ fun ChildReadingScreen(
     }
 
     DisposableEffect(lifecycleOwner, player, orbMatcher) {
+        fun requireFreshRecognition() {
+            recognitionGeneration.incrementAndGet()
+            recognitionArmed.set(false)
+            runCatching {
+                analysisExecutor.execute {
+                    orbMatcher.requireReconfirmation()
+                    recognitionArmed.set(true)
+                }
+            }
+        }
         fun pauseForInterruption(nextStatus: String) {
             if (isPlaying && player.pause()) {
                 isPlaying = false
                 pausedForPageChange = true
                 readingPhase = ChildReadingPhase.MOVED
                 status = nextStatus
-                analysisExecutor.execute { orbMatcher.requireReconfirmation() }
+                requireFreshRecognition()
             }
         }
         player.setInterruptionListener(
@@ -927,22 +942,31 @@ fun ChildReadingScreen(
             onFocusAvailable = {
                 if (pausedForPageChange) {
                     status = "请把书放回框里，确认后继续"
-                    analysisExecutor.execute { orbMatcher.requireReconfirmation() }
+                    requireFreshRecognition()
                 }
             },
         )
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
-                Lifecycle.Event.ON_PAUSE -> pauseForInterruption("阅读已暂停，回来后会先确认书面")
-                Lifecycle.Event.ON_RESUME -> if (pausedForPageChange) {
-                    status = "请把书放回框里，确认后继续"
-                    analysisExecutor.execute { orbMatcher.requireReconfirmation() }
+                Lifecycle.Event.ON_PAUSE -> {
+                    lifecycleResumed.set(false)
+                    pauseForInterruption("阅读已暂停，回来后会先确认书面")
+                }
+                Lifecycle.Event.ON_RESUME -> {
+                    lifecycleResumed.set(true)
+                    if (pausedForPageChange) {
+                        status = "请把书放回框里，确认后继续"
+                        requireFreshRecognition()
+                    }
                 }
                 else -> Unit
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
+            lifecycleResumed.set(false)
+            recognitionGeneration.incrementAndGet()
+            recognitionArmed.set(false)
             lifecycleOwner.lifecycle.removeObserver(observer)
             player.clearInterruptionListener()
         }
@@ -1001,6 +1025,8 @@ fun ChildReadingScreen(
         var lastFailureAtMs = 0L
         val analyzer = CameraFrameAnalyzer(detector) { result, _, grayFrame ->
             val evaluatedContext = recognitionContext.get()
+            val evaluatedGeneration = recognitionGeneration.get()
+            val evaluatedArmed = recognitionArmed.get()
             val evaluationStarted = android.os.SystemClock.elapsedRealtime()
             val decision = if (result.isMoving) {
                 orbMatcher.requireReconfirmation()
@@ -1058,7 +1084,11 @@ fun ChildReadingScreen(
                     readingPhase = ChildReadingPhase.CONFIRMING
                     status = "正在找这一页"
                 }
-                val currentDecision = decision?.takeIf { recognitionContext.get() == evaluatedContext }
+                val currentDecision = decision?.takeIf {
+                    recognitionContext.get() == evaluatedContext &&
+                        evaluatedArmed && recognitionArmed.get() &&
+                        recognitionGeneration.get() == evaluatedGeneration && lifecycleResumed.get()
+                }
                 if (currentDecision != null) diagnostic = recognitionDiagnostic(currentDecision)
                 if (currentDecision != null && !isPlaying && !result.pageTurned && !pausedForPageChange &&
                     readingPhase != ChildReadingPhase.PAUSED && readingPhase != ChildReadingPhase.FINISHED
@@ -1487,6 +1517,16 @@ fun ReferenceVerificationScreen(
                         inliers = confirmed.inliers
                         message = "验证通过，这个书面现在可以被识别"
                         runCatching {
+                            recognitionHistory.record(RecognitionEvent(
+                                timestampMs = System.currentTimeMillis(),
+                                bookId = book.id,
+                                spreadId = spreadId,
+                                outcome = RecognitionEvent.Outcome.REFERENCE_ADDED,
+                                bestInliers = 0,
+                                secondInliers = null,
+                                latencyMs = 0,
+                                searchPath = "REFERENCE_REPAIR_VERIFIED",
+                            ))
                             recognitionHistory.record(RecognitionEvent(
                                 timestampMs = System.currentTimeMillis(),
                                 bookId = book.id,
@@ -2005,6 +2045,16 @@ private fun SpreadReviewCard(
     var boundaryValue by remember(boundaryValueMs) {
         mutableFloatStateOf((boundaryValueMs ?: spread.endMs).toFloat())
     }
+    var dismissedTrimSuggestion by remember(spread.spreadId, waveform) { mutableStateOf(false) }
+    val trimSuggestion = remember(waveform, trimRange) {
+        waveform?.let {
+            WaveformMath.suggestSilenceTrim(
+                peaks = it,
+                sourceStartMs = trimRange.start.toLong(),
+                sourceEndMs = trimRange.endInclusive.toLong(),
+            )
+        }
+    }
     Card(
         shape = RoundedCornerShape(22.dp),
         colors = CardDefaults.cardColors(containerColor = SoftWhite),
@@ -2077,6 +2127,43 @@ private fun SpreadReviewCard(
                     style = MaterialTheme.typography.bodyMedium,
                     color = Ink.copy(alpha = 0.48f),
                 )
+                if (!dismissedTrimSuggestion && trimSuggestion != null &&
+                    (trimValue.start.toLong() != trimSuggestion.startMs || trimValue.endInclusive.toLong() != trimSuggestion.endMs)
+                ) {
+                    Surface(
+                        color = Honey.copy(alpha = .2f),
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+                    ) {
+                        Column(Modifier.padding(12.dp)) {
+                            Text("检测到可能的首尾空白", fontWeight = FontWeight.Bold)
+                            Text(
+                                "建议跳过开头 ${formatBoundary(trimSuggestion.removedFromStart(trimRange.start.toLong()))}、结尾 ${formatBoundary(trimSuggestion.removedFromEnd(trimRange.endInclusive.toLong()))}。只调整播放范围，不删除原始录音。",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = Ink.copy(alpha = .68f),
+                            )
+                            Row(
+                                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
+                                TextButton(onClick = {
+                                    onPreview(trimSuggestion.startMs, minOf(trimSuggestion.startMs + 2_000L, trimSuggestion.endMs))
+                                }) { Text("试听建议开头") }
+                                TextButton(onClick = {
+                                    onPreview(maxOf(trimSuggestion.startMs, trimSuggestion.endMs - 2_000L), trimSuggestion.endMs)
+                                }) { Text("试听建议结尾") }
+                                Button(
+                                    onClick = {
+                                        trimValue = trimSuggestion.startMs.toFloat()..trimSuggestion.endMs.toFloat()
+                                        onTrimChanged(trimSuggestion.startMs, trimSuggestion.endMs)
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = Moss),
+                                ) { Text("采用建议") }
+                                TextButton(onClick = { dismissedTrimSuggestion = true }) { Text("忽略") }
+                            }
+                        }
+                    }
+                }
                 RangeSlider(
                     value = trimValue,
                     onValueChange = {

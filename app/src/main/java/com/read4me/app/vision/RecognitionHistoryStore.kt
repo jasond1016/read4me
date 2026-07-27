@@ -38,7 +38,7 @@ object RecognitionHistory {
         .map { (identity, group) ->
             val latestReference = group.indexOfLast { it.outcome == RecognitionEvent.Outcome.REFERENCE_ADDED }
             val current = group.drop(latestReference + 1)
-            val confirmed = current.filter { it.outcome == RecognitionEvent.Outcome.CONFIRMED }
+            val confirmed = group.filter { it.outcome == RecognitionEvent.Outcome.CONFIRMED }
             RecognitionSummary(
                 bookId = identity.first,
                 spreadId = identity.second,

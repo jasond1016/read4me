@@ -29,6 +29,7 @@ class RecognitionHistoryTest {
 
     @Test fun addingAReferenceStartsANewRepairWindow() {
         val summary = RecognitionHistory.summarize(listOf(
+            event(RecognitionEvent.Outcome.CONFIRMED, 18),
             event(RecognitionEvent.Outcome.LOW_INLIERS, 4),
             event(RecognitionEvent.Outcome.LOW_INLIERS, 5),
             event(RecognitionEvent.Outcome.LOW_INLIERS, 6),
@@ -36,9 +37,9 @@ class RecognitionHistoryTest {
             event(RecognitionEvent.Outcome.CONFIRMED, 24),
         )).single()
 
-        assertEquals(1, summary.confirmations)
+        assertEquals(2, summary.confirmations)
         assertEquals(0, summary.failures)
-        assertEquals(24, summary.averageConfirmedInliers)
+        assertEquals(21, summary.averageConfirmedInliers)
         assertFalse(summary.needsNewReference)
     }
 

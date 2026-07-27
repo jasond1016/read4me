@@ -314,16 +314,6 @@ class MainActivity : ComponentActivity() {
                         },
                         onFinished = { updated, previous, image ->
                             books = repository.loadAll()
-                            recognitionHistory.record(com.read4me.app.vision.RecognitionEvent(
-                                timestampMs = System.currentTimeMillis(),
-                                bookId = updated.id,
-                                spreadId = current.spreadId,
-                                outcome = com.read4me.app.vision.RecognitionEvent.Outcome.REFERENCE_ADDED,
-                                bestInliers = 0,
-                                secondInliers = null,
-                                latencyMs = 0,
-                                searchPath = "REFERENCE_REPAIR",
-                            ))
                             destination = Destination.VerifyReference(
                                 updated, current.spreadId, previous, image, current.returnToLibrary,
                             )
