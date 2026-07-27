@@ -89,6 +89,9 @@ import com.read4me.app.vision.LayeredSearchPlanner
 import com.read4me.app.vision.OrbPageMatcher
 import com.read4me.app.vision.PageTurnDetector
 import com.read4me.app.vision.PhotoQualityAnalyzer
+import com.read4me.app.vision.RecognitionEvent
+import com.read4me.app.vision.RecognitionHistoryStore
+import com.read4me.app.vision.RecognitionSummary
 import com.read4me.app.vision.VisualFingerprint
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
@@ -106,6 +109,7 @@ import kotlin.math.ln
 fun LibraryScreen(
     books: List<StoryBook>,
     trashedBooks: List<StoryRepository.TrashedBook>,
+    recognitionSummaries: List<RecognitionSummary>,
     onCreateBook: () -> Unit,
     onChildMode: () -> Unit,
     onOpenBook: (StoryBook) -> Unit,
@@ -118,6 +122,7 @@ fun LibraryScreen(
     onPermanentlyDelete: (StoryRepository.TrashedBook) -> Unit,
     onImportLibrary: () -> Unit,
     onExportLibrary: () -> Unit,
+    onClearRecognitionHistory: () -> Unit,
 ) {
     Surface(Modifier.fillMaxSize(), color = Paper) {
         LazyColumn(
@@ -174,6 +179,33 @@ fun LibraryScreen(
                         Text("打开孩子阅读模式", color = Moss, fontWeight = FontWeight.Bold)
                     }
                 }
+            }
+
+            if (recognitionSummaries.isNotEmpty()) {
+                item {
+                    Text("识别记录与补拍建议", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.padding(top = 8.dp))
+                    Text("只记录本地识别分数，不保存摄像头画面。", style = MaterialTheme.typography.bodyMedium, color = Ink.copy(alpha = .58f))
+                }
+                items(recognitionSummaries, key = { "${it.bookId}:${it.spreadId}" }) { summary ->
+                    val book = books.firstOrNull { it.id == summary.bookId }
+                    val spread = book?.spreads?.firstOrNull { it.spreadId == summary.spreadId }
+                    if (book != null) {
+                        Card(shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = SoftWhite)) {
+                            Column(Modifier.fillMaxWidth().padding(14.dp)) {
+                                Text("${book.title} · 书面 ${spread?.ordinal ?: "-"}", fontWeight = FontWeight.Bold)
+                                Text(
+                                    "成功 ${summary.confirmations} 次 · 失败 ${summary.failures} 次 · 手动纠正 ${summary.manualCorrections} 次",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = Ink.copy(alpha = .68f),
+                                )
+                                if (summary.needsNewReference) {
+                                    Text("建议：为这个书面补拍一张角度或光线不同的清晰参考照片。", color = Coral, style = MaterialTheme.typography.bodyMedium)
+                                }
+                            }
+                        }
+                    }
+                }
+                item { TextButton(onClick = onClearRecognitionHistory) { Text("清除识别记录") } }
             }
 
             if (books.isEmpty()) {
@@ -649,7 +681,11 @@ fun RecordingScreen(
 }
 
 @Composable
-fun ChildReadingScreen(books: List<StoryBook>, onExit: () -> Unit) {
+fun ChildReadingScreen(
+    books: List<StoryBook>,
+    recognitionHistory: RecognitionHistoryStore,
+    onExit: () -> Unit,
+) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val mainExecutor = remember { ContextCompat.getMainExecutor(context) }
@@ -729,13 +765,48 @@ fun ChildReadingScreen(books: List<StoryBook>, onExit: () -> Unit) {
 
     DisposableEffect(controller, lifecycleOwner, orbMatcher) {
         controller.bindToLifecycle(lifecycleOwner)
+        var lastFailureKey: String? = null
+        var lastFailureAtMs = 0L
         val analyzer = CameraFrameAnalyzer(detector) { result, _, grayFrame ->
             val evaluatedContext = recognitionContext.get()
+            val evaluationStarted = android.os.SystemClock.elapsedRealtime()
             val decision = if (result.isMoving) {
                 orbMatcher.requireReconfirmation()
                 null
             } else {
                 orbMatcher.evaluate(grayFrame, evaluatedContext)
+            }
+            val latencyMs = android.os.SystemClock.elapsedRealtime() - evaluationStarted
+            decision?.let { current ->
+                val best = current.best
+                val outcome = when (current.state) {
+                    OrbPageMatcher.State.CONFIRMED -> RecognitionEvent.Outcome.CONFIRMED
+                    OrbPageMatcher.State.LOW_INLIERS -> RecognitionEvent.Outcome.LOW_INLIERS
+                    OrbPageMatcher.State.AMBIGUOUS -> RecognitionEvent.Outcome.AMBIGUOUS
+                    else -> null
+                }
+                if (outcome != null && best != null) {
+                    val now = System.currentTimeMillis()
+                    val failureKey = "${best.reference.groupKey}:$outcome"
+                    val shouldRecord = outcome == RecognitionEvent.Outcome.CONFIRMED ||
+                        failureKey != lastFailureKey || now - lastFailureAtMs >= 3_000L
+                    if (shouldRecord) {
+                        runCatching { recognitionHistory.record(RecognitionEvent(
+                            timestampMs = now,
+                            bookId = best.reference.bookId,
+                            spreadId = best.reference.spreadId,
+                            outcome = outcome,
+                            bestInliers = best.inliers,
+                            secondInliers = current.second?.inliers,
+                            latencyMs = latencyMs,
+                            searchPath = current.searchPath.name,
+                        )) }
+                        if (outcome != RecognitionEvent.Outcome.CONFIRMED) {
+                            lastFailureKey = failureKey
+                            lastFailureAtMs = now
+                        }
+                    }
+                }
             }
             mainExecutor.execute {
                 isMoving = result.isMoving
@@ -911,6 +982,16 @@ fun ChildReadingScreen(books: List<StoryBook>, onExit: () -> Unit) {
                                             onClick = {
                                                 manualCorrection = true
                                                 choosingManualSpread = false
+                                                runCatching { recognitionHistory.record(RecognitionEvent(
+                                                    timestampMs = System.currentTimeMillis(),
+                                                    bookId = choiceBook.id,
+                                                    spreadId = choiceSpread.spreadId,
+                                                    outcome = RecognitionEvent.Outcome.MANUAL_CORRECTION,
+                                                    bestInliers = 0,
+                                                    secondInliers = null,
+                                                    latencyMs = 0L,
+                                                    searchPath = "MANUAL",
+                                                )) }
                                                 play(choiceBook, choiceSpread, 0)
                                                 status = "正在讲《${choiceBook.title}》第 ${choiceSpread.ordinal} 个书面"
                                             },

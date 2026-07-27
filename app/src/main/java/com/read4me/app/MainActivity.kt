@@ -25,6 +25,7 @@ import com.read4me.app.ui.RecaptureScreen
 import com.read4me.app.ui.ReviewScreen
 import com.read4me.app.ui.SetupScreen
 import com.read4me.app.ui.ChildReadingScreen
+import com.read4me.app.vision.RecognitionHistoryStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -51,11 +52,13 @@ class MainActivity : ComponentActivity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         val repository = StoryRepository(this)
+        val recognitionHistory = RecognitionHistoryStore(this)
         setContent {
             Read4MeTheme {
                 var destination: Destination by remember { mutableStateOf(Destination.Library) }
                 var books by remember { mutableStateOf(repository.loadAll()) }
                 var trashedBooks by remember { mutableStateOf(repository.loadTrash()) }
+                var recognitionSummaries by remember { mutableStateOf(recognitionHistory.summaries()) }
                 var permissionTarget: Destination? by remember { mutableStateOf(null) }
                 var permissionMessage by remember { mutableStateOf<String?>(null) }
                 var archiveMessage by remember { mutableStateOf<String?>(null) }
@@ -131,6 +134,7 @@ class MainActivity : ComponentActivity() {
                     Destination.Library -> LibraryScreen(
                         books = books,
                         trashedBooks = trashedBooks,
+                        recognitionSummaries = recognitionSummaries,
                         onCreateBook = {
                             permissionMessage = null
                             destination = Destination.Setup
@@ -187,11 +191,20 @@ class MainActivity : ComponentActivity() {
                             libraryImportLauncher.launch(arrayOf("application/zip", "application/octet-stream"))
                         },
                         onExportLibrary = { libraryExportLauncher.launch("read4me-library.read4me-library") },
+                        onClearRecognitionHistory = {
+                            recognitionHistory.clear()
+                            recognitionSummaries = emptyList()
+                            archiveMessage = "识别记录已清除"
+                        },
                     )
 
                     Destination.ChildReading -> ChildReadingScreen(
                         books = books,
-                        onExit = { destination = Destination.Library },
+                        recognitionHistory = recognitionHistory,
+                        onExit = {
+                            recognitionSummaries = recognitionHistory.summaries()
+                            destination = Destination.Library
+                        },
                     )
 
                     Destination.Setup -> SetupScreen(
