@@ -1,5 +1,7 @@
 package com.read4me.app.ui
 
+import android.app.Activity
+import android.view.WindowManager
 import androidx.activity.compose.BackHandler
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
@@ -16,6 +18,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -78,6 +81,9 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -888,6 +894,24 @@ fun ChildReadingScreen(
     var phaseBeforeConfirmation by remember { mutableStateOf(ChildReadingPhase.LOOKING) }
     var playbackProgress by remember { mutableFloatStateOf(0f) }
 
+    DisposableEffect(context) {
+        val window = (context as? Activity)?.window
+        if (window != null) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            WindowCompat.getInsetsController(window, window.decorView).apply {
+                hide(WindowInsetsCompat.Type.systemBars())
+                systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            }
+        }
+        onDispose {
+            window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            if (window != null) {
+                WindowCompat.getInsetsController(window, window.decorView)
+                    .show(WindowInsetsCompat.Type.systemBars())
+            }
+        }
+    }
+
     DisposableEffect(lifecycleOwner, player, orbMatcher) {
         fun pauseForInterruption(nextStatus: String) {
             if (isPlaying && player.pause()) {
@@ -936,7 +960,7 @@ fun ChildReadingScreen(
             parentMode = false
             choosingManualSpread = false
         } else {
-            parentMode = true
+            onExit()
         }
     }
 
@@ -1122,6 +1146,19 @@ fun ChildReadingScreen(
                         detectTapGestures(onLongPress = { parentMode = true })
                     }
                     .padding(horizontal = 12.dp, vertical = 8.dp),
+            )
+
+            Text(
+                "← 返回书架",
+                color = Color.White,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(18.dp)
+                    .background(Ink.copy(alpha = 0.5f), RoundedCornerShape(14.dp))
+                    .clickable(onClick = onExit)
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
             )
 
             Surface(
