@@ -78,6 +78,8 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.read4me.app.audio.AudioSegmentPlayer
 import com.read4me.app.audio.PersistentWaveformCache
@@ -850,7 +852,7 @@ fun ChildReadingScreen(
         }
     }
     val detector = remember { PageTurnDetector() }
-    val player = remember { AudioSegmentPlayer() }
+    val player = remember { AudioSegmentPlayer(context.applicationContext) }
     val spreadsByKey = remember(books) {
         books.flatMap { book -> book.spreads.map { spread -> "${book.id}:${spread.spreadId}" to (book to spread) } }.toMap()
     }
@@ -885,6 +887,42 @@ fun ChildReadingScreen(
     }
     var phaseBeforeConfirmation by remember { mutableStateOf(ChildReadingPhase.LOOKING) }
     var playbackProgress by remember { mutableFloatStateOf(0f) }
+
+    DisposableEffect(lifecycleOwner, player, orbMatcher) {
+        fun pauseForInterruption(nextStatus: String) {
+            if (isPlaying && player.pause()) {
+                isPlaying = false
+                pausedForPageChange = true
+                readingPhase = ChildReadingPhase.MOVED
+                status = nextStatus
+                analysisExecutor.execute { orbMatcher.requireReconfirmation() }
+            }
+        }
+        player.setInterruptionListener(
+            onInterrupted = { pauseForInterruption("声音被其他应用打断，回来后会继续") },
+            onFocusAvailable = {
+                if (pausedForPageChange) {
+                    status = "请把书放回框里，确认后继续"
+                    analysisExecutor.execute { orbMatcher.requireReconfirmation() }
+                }
+            },
+        )
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_PAUSE -> pauseForInterruption("阅读已暂停，回来后会先确认书面")
+                Lifecycle.Event.ON_RESUME -> if (pausedForPageChange) {
+                    status = "请把书放回框里，确认后继续"
+                    analysisExecutor.execute { orbMatcher.requireReconfirmation() }
+                }
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            player.clearInterruptionListener()
+        }
+    }
 
     LaunchedEffect(isPlaying) {
         while (isPlaying) {
@@ -1513,7 +1551,7 @@ fun InsertSpreadScreen(
     }
     var pendingFile by remember { mutableStateOf<File?>(null) }
     var activeToken by remember { mutableStateOf<String?>(UUID.randomUUID().toString()) }
-    val player = remember { AudioSegmentPlayer() }
+    val player = remember { AudioSegmentPlayer(context.applicationContext) }
     var latestFingerprint by remember { mutableStateOf<ByteArray?>(null) }
     var capturedFingerprint by remember { mutableStateOf<ByteArray?>(null) }
     var photoReady by remember { mutableStateOf(false) }
@@ -1736,8 +1774,8 @@ fun ReviewScreen(
     initialUndoImage: File? = null,
     onBack: () -> Unit,
 ) {
-    val player = remember { AudioSegmentPlayer() }
     val context = LocalContext.current
+    val player = remember { AudioSegmentPlayer(context.applicationContext) }
     val persistentWaveforms = remember(context.cacheDir) {
         PersistentWaveformCache(File(context.cacheDir, "read4me/waveforms"))
     }
