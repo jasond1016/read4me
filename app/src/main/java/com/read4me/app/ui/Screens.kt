@@ -499,6 +499,18 @@ private fun BookGuideFrame(active: Boolean, modifier: Modifier = Modifier) {
     )
 }
 
+@Composable
+private fun KeepScreenOn(enabled: Boolean = true) {
+    val context = LocalContext.current
+    DisposableEffect(context, enabled) {
+        val window = (context as? Activity)?.window
+        if (enabled) window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        onDispose {
+            if (enabled) window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
+}
+
 private enum class ChildReadingPhase {
     NO_BOOKS,
     LOOKING,
@@ -661,6 +673,8 @@ fun RecordingScreen(
     var amplitude by remember { mutableFloatStateOf(0f) }
     var captureMessage by remember { mutableStateOf("把完整书面放进取景框") }
     var latestFingerprint by remember { mutableStateOf<ByteArray?>(null) }
+
+    KeepScreenOn(isRecording)
 
     fun captureMarker(source: MarkerSource) {
         if (!isRecording) return
@@ -899,17 +913,17 @@ fun ChildReadingScreen(
     var phaseBeforeConfirmation by remember { mutableStateOf(ChildReadingPhase.LOOKING) }
     var playbackProgress by remember { mutableFloatStateOf(0f) }
 
+    KeepScreenOn()
+
     DisposableEffect(context) {
         val window = (context as? Activity)?.window
         if (window != null) {
-            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             WindowCompat.getInsetsController(window, window.decorView).apply {
                 hide(WindowInsetsCompat.Type.systemBars())
                 systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
             }
         }
         onDispose {
-            window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             if (window != null) {
                 WindowCompat.getInsetsController(window, window.decorView)
                     .show(WindowInsetsCompat.Type.systemBars())
@@ -1752,6 +1766,8 @@ fun RerecordScreen(
     var isRecording by remember { mutableStateOf(false) }
     var elapsedMs by remember { mutableLongStateOf(0L) }
     var amplitude by remember { mutableFloatStateOf(0f) }
+
+    KeepScreenOn(isRecording)
 
     fun cancel() {
         recorder.release()
