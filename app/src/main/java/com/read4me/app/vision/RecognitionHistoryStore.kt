@@ -17,7 +17,7 @@ data class RecognitionEvent(
     val latencyMs: Long,
     val searchPath: String,
 ) {
-    enum class Outcome { CONFIRMED, LOW_INLIERS, AMBIGUOUS, MANUAL_CORRECTION }
+    enum class Outcome { CONFIRMED, LOW_INLIERS, AMBIGUOUS, MANUAL_CORRECTION, REFERENCE_ADDED }
 }
 
 data class RecognitionSummary(
@@ -36,15 +36,17 @@ object RecognitionHistory {
         .filter { it.bookId != null }
         .groupBy { it.bookId!! to it.spreadId }
         .map { (identity, group) ->
-            val confirmed = group.filter { it.outcome == RecognitionEvent.Outcome.CONFIRMED }
+            val latestReference = group.indexOfLast { it.outcome == RecognitionEvent.Outcome.REFERENCE_ADDED }
+            val current = group.drop(latestReference + 1)
+            val confirmed = current.filter { it.outcome == RecognitionEvent.Outcome.CONFIRMED }
             RecognitionSummary(
                 bookId = identity.first,
                 spreadId = identity.second,
                 confirmations = confirmed.size,
-                failures = group.count {
+                failures = current.count {
                     it.outcome == RecognitionEvent.Outcome.LOW_INLIERS || it.outcome == RecognitionEvent.Outcome.AMBIGUOUS
                 },
-                manualCorrections = group.count { it.outcome == RecognitionEvent.Outcome.MANUAL_CORRECTION },
+                manualCorrections = current.count { it.outcome == RecognitionEvent.Outcome.MANUAL_CORRECTION },
                 averageConfirmedInliers = confirmed.map(RecognitionEvent::bestInliers).average().takeIf { !it.isNaN() }?.toInt() ?: 0,
             )
         }

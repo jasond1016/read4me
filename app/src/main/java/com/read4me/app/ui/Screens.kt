@@ -109,6 +109,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.ln
 
@@ -131,6 +132,7 @@ fun LibraryScreen(
     onExportLibrary: () -> Unit,
     onClearRecognitionHistory: () -> Unit,
     onClearMediaCache: () -> Unit,
+    onRepairRecognition: (StoryBook, String) -> Unit,
 ) {
     Surface(Modifier.fillMaxSize(), color = Paper) {
         LazyColumn(
@@ -211,6 +213,14 @@ fun LibraryScreen(
                                 )
                                 if (summary.needsNewReference) {
                                     Text("建议：为这个书面补拍一张角度或光线不同的清晰参考照片。", color = Coral, style = MaterialTheme.typography.bodyMedium)
+                                    if (spread != null) {
+                                        Button(
+                                            onClick = { onRepairRecognition(book, spread.spreadId) },
+                                            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                                            shape = RoundedCornerShape(14.dp),
+                                            colors = ButtonDefaults.buttonColors(containerColor = Moss),
+                                        ) { Text("补拍并立即验证") }
+                                    }
                                 }
                             }
                         }
@@ -1338,6 +1348,137 @@ fun RecaptureScreen(
                         shape = RoundedCornerShape(18.dp),
                     ) { Text(if (isCapturing) "分析并保存中" else "拍下并添加") }
                     TextButton(enabled = !isCapturing, onClick = onCancel) { Text("取消") }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun ReferenceVerificationScreen(
+    book: StoryBook,
+    spreadId: String,
+    recognitionHistory: RecognitionHistoryStore,
+    onCancel: () -> Unit,
+    onFinished: () -> Unit,
+) {
+    val target = book.spreads.firstOrNull { it.spreadId == spreadId }
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val mainExecutor = remember { ContextCompat.getMainExecutor(context) }
+    val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
+    val controller = remember {
+        LifecycleCameraController(context).apply {
+            cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
+            setEnabledUseCases(CameraController.IMAGE_ANALYSIS)
+        }
+    }
+    val references = remember(book) {
+        book.spreads.flatMap { spread ->
+            spread.references.filter { it.file.exists() }.map { reference ->
+                OrbPageMatcher.Reference(book.id, spread.ordinal, spread.spreadId, reference.file, reference.referenceId)
+            }
+        }
+    }
+    val matcher = remember(references) { OrbPageMatcher(references) }
+    val verificationContext = remember(target) {
+        target?.let { LayeredSearchPlanner.Context(book.id, it.ordinal) }
+    }
+    val verifiedOnce = remember { AtomicBoolean(false) }
+    var verified by remember { mutableStateOf(false) }
+    var inliers by remember { mutableStateOf(0) }
+    var message by remember { mutableStateOf("把刚补拍的书面放回白框，保持不动") }
+
+    BackHandler(onBack = onCancel)
+
+    DisposableEffect(controller, lifecycleOwner, matcher) {
+        controller.bindToLifecycle(lifecycleOwner)
+        val analyzer = CameraFrameAnalyzer(PageTurnDetector()) { result, _, grayFrame ->
+            if (verifiedOnce.get()) return@CameraFrameAnalyzer
+            if (result.isMoving) {
+                matcher.requireReconfirmation()
+                mainExecutor.execute { message = "画面在移动，请把书放稳" }
+                return@CameraFrameAnalyzer
+            }
+            val started = android.os.SystemClock.elapsedRealtime()
+            val decision = matcher.evaluate(grayFrame, verificationContext)
+            val elapsed = android.os.SystemClock.elapsedRealtime() - started
+            mainExecutor.execute {
+                if (verifiedOnce.get()) return@execute
+                val confirmed = decision.confirmed
+                when {
+                    confirmed?.reference?.spreadId == spreadId && verifiedOnce.compareAndSet(false, true) -> {
+                        verified = true
+                        inliers = confirmed.inliers
+                        message = "验证通过，这个书面现在可以被识别"
+                        runCatching {
+                            recognitionHistory.record(RecognitionEvent(
+                                timestampMs = System.currentTimeMillis(),
+                                bookId = book.id,
+                                spreadId = spreadId,
+                                outcome = RecognitionEvent.Outcome.CONFIRMED,
+                                bestInliers = confirmed.inliers,
+                                secondInliers = decision.second?.inliers,
+                                latencyMs = elapsed,
+                                searchPath = "REFERENCE_VERIFY",
+                            ))
+                        }
+                    }
+                    confirmed != null -> {
+                        message = "识别成了书面 ${confirmed.reference.spreadOrdinal}，请确认放入的是书面 ${target?.ordinal ?: "-"}"
+                        matcher.requireReconfirmation()
+                    }
+                    decision.state == OrbPageMatcher.State.LOW_INLIERS -> message = "还没认出来，试着减少反光并放稳一点"
+                    decision.state == OrbPageMatcher.State.AMBIGUOUS -> message = "和其他书面太相似，请换一个稍微不同的角度"
+                    decision.state == OrbPageMatcher.State.TOO_FEW_FEATURES -> message = "画面细节太少，请让完整书面进入白框"
+                    decision.state == OrbPageMatcher.State.CONFIRMING -> message = "找到了，继续保持不动"
+                }
+            }
+        }
+        controller.setImageAnalysisAnalyzer(analysisExecutor, analyzer)
+        onDispose {
+            controller.clearImageAnalysisAnalyzer()
+            controller.unbind()
+            analysisExecutor.execute { matcher.close() }
+            analysisExecutor.shutdown()
+        }
+    }
+
+    Surface(Modifier.fillMaxSize(), color = Ink) {
+        Box(Modifier.fillMaxSize()) {
+            AndroidView(
+                factory = { viewContext -> PreviewView(viewContext).apply {
+                    scaleType = PreviewView.ScaleType.FILL_CENTER
+                    this.controller = controller
+                } },
+                modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth().aspectRatio(1.32f),
+            )
+            Box(Modifier.align(Alignment.TopCenter).fillMaxWidth().aspectRatio(1.32f)) {
+                BookGuideFrame(active = verified, modifier = Modifier.align(Alignment.Center))
+            }
+            Surface(
+                color = Paper.copy(alpha = 0.97f),
+                shape = RoundedCornerShape(topStart = 30.dp, topEnd = 30.dp),
+                modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth(),
+            ) {
+                Column(Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        if (verified) "✓ 补拍验证通过" else "立即验证书面 ${target?.ordinal ?: "-"}",
+                        style = MaterialTheme.typography.headlineLarge,
+                        color = if (verified) Moss else Ink,
+                    )
+                    Text(message, modifier = Modifier.padding(top = 10.dp, bottom = 18.dp))
+                    if (verified) {
+                        Text("几何匹配内点：$inliers", style = MaterialTheme.typography.bodyMedium, color = Ink.copy(alpha = .58f))
+                        Button(
+                            onClick = onFinished,
+                            modifier = Modifier.fillMaxWidth().height(56.dp).padding(top = 8.dp),
+                            shape = RoundedCornerShape(18.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = Moss),
+                        ) { Text("完成修复") }
+                    } else {
+                        TextButton(onClick = onCancel) { Text("暂不验证，保留新照片") }
+                    }
                 }
             }
         }

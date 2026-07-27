@@ -27,6 +27,21 @@ class RecognitionHistoryTest {
         assertFalse(RecognitionHistory.summarize(listOf(event(RecognitionEvent.Outcome.LOW_INLIERS, 4))).single().needsNewReference)
     }
 
+    @Test fun addingAReferenceStartsANewRepairWindow() {
+        val summary = RecognitionHistory.summarize(listOf(
+            event(RecognitionEvent.Outcome.LOW_INLIERS, 4),
+            event(RecognitionEvent.Outcome.LOW_INLIERS, 5),
+            event(RecognitionEvent.Outcome.LOW_INLIERS, 6),
+            event(RecognitionEvent.Outcome.REFERENCE_ADDED, 0),
+            event(RecognitionEvent.Outcome.CONFIRMED, 24),
+        )).single()
+
+        assertEquals(1, summary.confirmations)
+        assertEquals(0, summary.failures)
+        assertEquals(24, summary.averageConfirmedInliers)
+        assertFalse(summary.needsNewReference)
+    }
+
     private fun event(outcome: RecognitionEvent.Outcome, inliers: Int) = RecognitionEvent(
         1L, "book", "spread", outcome, inliers, null, 10L, "LIBRARY",
     )

@@ -23,6 +23,7 @@ import com.read4me.app.ui.Read4MeTheme
 import com.read4me.app.ui.RecordingScreen
 import com.read4me.app.ui.RerecordScreen
 import com.read4me.app.ui.RecaptureScreen
+import com.read4me.app.ui.ReferenceVerificationScreen
 import com.read4me.app.ui.ReviewScreen
 import com.read4me.app.ui.SetupScreen
 import com.read4me.app.ui.StoryImageLoader
@@ -45,6 +46,14 @@ class MainActivity : ComponentActivity() {
             val spreadId: String,
             val undo: StoryBook?,
             val undoImage: java.io.File?,
+            val returnToLibrary: Boolean = false,
+        ) : Destination
+        data class VerifyReference(
+            val book: StoryBook,
+            val spreadId: String,
+            val undo: StoryBook?,
+            val undoImage: java.io.File?,
+            val returnToLibrary: Boolean,
         ) : Destination
         data class InsertSpread(val book: StoryBook, val anchorSpreadId: String, val undo: StoryBook?, val undoImage: java.io.File?) : Destination
     }
@@ -203,6 +212,14 @@ class MainActivity : ComponentActivity() {
                             StoryImageLoader.clearDisk(this@MainActivity)
                             archiveMessage = "波形和缩略图缓存已清除"
                         },
+                        onRepairRecognition = { book, spreadId ->
+                            val target = Destination.Recapture(book, spreadId, null, null, returnToLibrary = true)
+                            if (hasCameraPermission()) destination = target
+                            else {
+                                permissionTarget = target
+                                permissionLauncher.launch(arrayOf(Manifest.permission.CAMERA))
+                            }
+                        },
                     )
 
                     Destination.ChildReading -> ChildReadingScreen(
@@ -292,10 +309,46 @@ class MainActivity : ComponentActivity() {
                         book = current.book,
                         spreadId = current.spreadId,
                         repository = repository,
-                        onCancel = { destination = Destination.Review(current.book, current.undo, current.undoImage) },
+                        onCancel = {
+                            destination = if (current.returnToLibrary) Destination.Library else {
+                                Destination.Review(current.book, current.undo, current.undoImage)
+                            }
+                        },
                         onFinished = { updated, previous, image ->
                             books = repository.loadAll()
-                            destination = Destination.Review(updated, previous, image)
+                            recognitionHistory.record(com.read4me.app.vision.RecognitionEvent(
+                                timestampMs = System.currentTimeMillis(),
+                                bookId = updated.id,
+                                spreadId = current.spreadId,
+                                outcome = com.read4me.app.vision.RecognitionEvent.Outcome.REFERENCE_ADDED,
+                                bestInliers = 0,
+                                secondInliers = null,
+                                latencyMs = 0,
+                                searchPath = "REFERENCE_REPAIR",
+                            ))
+                            destination = Destination.VerifyReference(
+                                updated, current.spreadId, previous, image, current.returnToLibrary,
+                            )
+                        },
+                    )
+
+                    is Destination.VerifyReference -> ReferenceVerificationScreen(
+                        book = current.book,
+                        spreadId = current.spreadId,
+                        recognitionHistory = recognitionHistory,
+                        onCancel = {
+                            recognitionSummaries = recognitionHistory.summaries()
+                            books = repository.loadAll()
+                            destination = if (current.returnToLibrary) Destination.Library else {
+                                Destination.Review(current.book, current.undo, current.undoImage)
+                            }
+                        },
+                        onFinished = {
+                            recognitionSummaries = recognitionHistory.summaries()
+                            books = repository.loadAll()
+                            destination = if (current.returnToLibrary) Destination.Library else {
+                                Destination.Review(current.book, current.undo, current.undoImage)
+                            }
                         },
                     )
 
