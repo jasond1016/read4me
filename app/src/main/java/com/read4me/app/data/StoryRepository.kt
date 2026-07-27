@@ -3,7 +3,9 @@ package com.read4me.app.data
 import android.content.Context
 import android.util.Base64
 import com.read4me.app.model.MarkerSource
+import com.read4me.app.model.PhotoQuality
 import com.read4me.app.model.SpreadMarker
+import com.read4me.app.model.SpreadReference
 import com.read4me.app.model.StoryBook
 import org.json.JSONArray
 import org.json.JSONObject
@@ -49,13 +51,17 @@ class StoryRepository(context: Context) {
                     put("timestampMs", marker.timestampMs)
                     put("recordingStartMs", marker.recordingStartMs)
                     put("recordingEndMs", marker.recordingEndMs)
-                    put("image", marker.imageFile?.name ?: JSONObject.NULL)
+                    put("image", marker.references.firstOrNull()?.file?.name ?: JSONObject.NULL)
                     put("source", marker.source.name)
                     put(
                         "fingerprint",
-                        marker.fingerprint?.let { Base64.encodeToString(it, Base64.NO_WRAP) } ?: JSONObject.NULL,
+                        marker.references.firstOrNull()?.fingerprint
+                            ?.let { Base64.encodeToString(it, Base64.NO_WRAP) } ?: JSONObject.NULL,
                     )
-                    put("fingerprintVersion", marker.fingerprintVersion)
+                    put("fingerprintVersion", marker.references.firstOrNull()?.fingerprintVersion ?: 1)
+                    put("references", JSONArray().apply {
+                        marker.references.forEach { reference -> put(referenceJson(book, reference)) }
+                    })
                     put(
                         "overrideAudio",
                         marker.overrideAudioFile?.relativeTo(book.directory)?.invariantSeparatorsPath
@@ -68,7 +74,7 @@ class StoryRepository(context: Context) {
             }
         }
         val manifest = JSONObject().apply {
-            put("version", 5)
+            put("version", 6)
             put("id", book.id)
             put("title", book.title)
             put("audio", book.audioFile.name)
@@ -121,7 +127,8 @@ class StoryRepository(context: Context) {
     private fun validateFiles(book: StoryBook) {
         require(book.audioFile.isFile) { "Recording is missing" }
         require(book.markers.isNotEmpty()) { "Book has no spreads" }
-        require(book.markers.all { it.imageFile?.isFile == true }) { "A spread image is missing" }
+        require(book.markers.all { it.references.isNotEmpty() }) { "A spread has no reference images" }
+        require(book.markers.all { marker -> marker.references.all { it.file.isFile } }) { "A spread image is missing" }
         require(book.markers.all { it.overrideAudioFile == null || it.overrideAudioFile.isFile }) {
             "An override recording is missing"
         }
@@ -165,7 +172,7 @@ class StoryRepository(context: Context) {
     private fun load(directory: File): StoryBook? = runCatching {
         val json = JSONObject(File(directory, "manifest.json").readText())
         val version = json.optInt("version", 1)
-        require(version in 1..5) { "Unsupported manifest version $version" }
+        require(version in 1..6) { "Unsupported manifest version $version" }
         val markerJson = json.getJSONArray("markers")
         val spreadsDirectory = File(directory, "spreads")
         val markers = buildList {
@@ -178,15 +185,30 @@ class StoryRepository(context: Context) {
                 val deterministicId = UUID.nameUUIDFromBytes(
                     "${json.getString("id")}:$index:$timestamp".toByteArray(Charsets.UTF_8),
                 ).toString()
+                val legacyFingerprint = item.optString("fingerprint")
+                    .takeIf { it.isNotBlank() && it != "null" }
+                    ?.let { Base64.decode(it, Base64.NO_WRAP) }
+                val references = if (version >= 6) {
+                    val array = item.getJSONArray("references")
+                    buildList {
+                        for (referenceIndex in 0 until array.length()) {
+                            val reference = array.getJSONObject(referenceIndex)
+                            add(readReference(directory, reference))
+                        }
+                    }
+                } else image?.let {
+                    listOf(SpreadReference(
+                        file = File(spreadsDirectory, it),
+                        fingerprint = legacyFingerprint,
+                        fingerprintVersion = item.optInt("fingerprintVersion", 1),
+                        referenceId = UUID.nameUUIDFromBytes("$deterministicId:$it".toByteArray()).toString(),
+                    ))
+                }.orEmpty()
                 add(
                     SpreadMarker(
                         timestampMs = timestamp,
-                        imageFile = image?.let { File(spreadsDirectory, it) }?.takeIf(File::exists),
                         source = MarkerSource.valueOf(item.getString("source")),
-                        fingerprint = item.optString("fingerprint")
-                            .takeIf { it.isNotBlank() && it != "null" }
-                            ?.let { Base64.decode(it, Base64.NO_WRAP) },
-                        fingerprintVersion = item.optInt("fingerprintVersion", 1),
+                        references = references,
                         overrideAudioFile = item.optString("overrideAudio")
                             .takeIf { it.isNotBlank() && it != "null" }
                             ?.let { File(directory, it) },
@@ -213,6 +235,51 @@ class StoryRepository(context: Context) {
             markers = markers,
         )
     }.getOrNull()
+
+    private fun referenceJson(book: StoryBook, reference: SpreadReference) = JSONObject().apply {
+        put("id", reference.referenceId)
+        put("file", reference.file.relativeTo(book.directory).invariantSeparatorsPath)
+        put("fingerprint", reference.fingerprint?.let { Base64.encodeToString(it, Base64.NO_WRAP) } ?: JSONObject.NULL)
+        put("fingerprintVersion", reference.fingerprintVersion)
+        reference.quality?.let { quality ->
+            put("quality", JSONObject().apply {
+                put("status", quality.status.name)
+                put("laplacianVariance", quality.laplacianVariance ?: JSONObject.NULL)
+                put("orbKeypoints", quality.orbKeypoints ?: JSONObject.NULL)
+                put("meanBrightness", quality.meanBrightness ?: JSONObject.NULL)
+                put("darkPixelRatio", quality.darkPixelRatio ?: JSONObject.NULL)
+                put("overexposedPixelRatio", quality.overexposedPixelRatio ?: JSONObject.NULL)
+                put("issues", JSONArray(quality.issues.map { it.name }))
+            })
+        }
+    }
+
+    private fun readReference(directory: File, json: JSONObject): SpreadReference {
+        val quality = json.optJSONObject("quality")?.let { value ->
+            PhotoQuality(
+                status = PhotoQuality.Status.valueOf(value.getString("status")),
+                laplacianVariance = value.optDoubleOrNull("laplacianVariance"),
+                orbKeypoints = if (value.isNull("orbKeypoints")) null else value.getInt("orbKeypoints"),
+                meanBrightness = value.optDoubleOrNull("meanBrightness"),
+                darkPixelRatio = value.optDoubleOrNull("darkPixelRatio"),
+                overexposedPixelRatio = value.optDoubleOrNull("overexposedPixelRatio"),
+                issues = value.optJSONArray("issues")?.let { array ->
+                    (0 until array.length()).map { PhotoQuality.Issue.valueOf(array.getString(it)) }
+                }.orEmpty(),
+            )
+        }
+        return SpreadReference(
+            file = File(directory, json.getString("file")),
+            fingerprint = json.optString("fingerprint").takeIf { it.isNotBlank() && it != "null" }
+                ?.let { Base64.decode(it, Base64.NO_WRAP) },
+            fingerprintVersion = json.optInt("fingerprintVersion", 1),
+            quality = quality,
+            referenceId = json.getString("id"),
+        )
+    }
+
+    private fun JSONObject.optDoubleOrNull(name: String): Double? =
+        if (isNull(name) || !has(name)) null else getDouble(name)
 
     fun overrideAudioFile(book: StoryBook, spreadId: String): File =
         File(File(book.directory, "overrides").apply { mkdirs() }, "$spreadId.m4a")

@@ -28,8 +28,10 @@ class OrbPageMatcher(
         val spreadOrdinal: Int,
         val spreadId: String,
         val imageFile: File,
+        val referenceId: String = imageFile.name,
     ) {
-        val key: String get() = "$bookId:$spreadId"
+        val key: String get() = "$bookId:$spreadId:$referenceId"
+        val groupKey: String get() = "$bookId:$spreadId"
     }
 
     data class Score(
@@ -112,9 +114,9 @@ class OrbPageMatcher(
             } else {
                 val adjacent = LayeredSearchPlanner.adjacent(context, plannedCandidates)
                     .mapNotNull { candidatesByKey[it.key] }
-                val adjacentScores = adjacent
+                val adjacentScores = aggregate(adjacent
                     .map { score(queryKeypoints, it, ratioMatches(queryDescriptors, it)) }
-                    .sortedWith(compareByDescending<Score> { it.inliers }.thenByDescending { it.goodMatches })
+                )
                 val adjacentBest = adjacentScores.firstOrNull()
                 val adjacentSecond = adjacentScores.getOrNull(1)
                 val strongAdjacent = adjacentBest != null &&
@@ -137,15 +139,16 @@ class OrbPageMatcher(
                         }
                     }
                     val shortlist = LayeredSearchPlanner.shortlist(cheap)
+                    val expandedShortlist = LayeredSearchPlanner.expandShortlistedGroups(shortlist, plannedCandidates)
                     val finalists = LayeredSearchPlanner.finalists(
                         adjacentScores.map { it.reference.planningCandidate() },
-                        shortlist,
+                        expandedShortlist,
                     )
-                    val scores = finalists.mapNotNull { candidate ->
+                    val scores = aggregate(finalists.mapNotNull { candidate ->
                         adjacentByKey[candidate.key] ?: candidatesByKey[candidate.key]?.let {
                             score(queryKeypoints, it, ratioMatches(queryDescriptors, it))
                         }
-                    }.sortedWith(compareByDescending<Score> { it.inliers }.thenByDescending { it.goodMatches })
+                    })
                     confirm(
                         scores.firstOrNull(),
                         scores.getOrNull(1),
@@ -180,13 +183,13 @@ class OrbPageMatcher(
         }
 
         checkNotNull(best)
-        if (pendingKey == best.reference.key) pendingCount++ else {
-            pendingKey = best.reference.key
+        if (pendingKey == best.reference.groupKey) pendingCount++ else {
+            pendingKey = best.reference.groupKey
             pendingCount = 1
         }
-        if (confirmedKey == best.reference.key) return decision(best, second, State.STABLE, verified, searchPath)
+        if (confirmedKey == best.reference.groupKey) return decision(best, second, State.STABLE, verified, searchPath)
         if (pendingCount < confirmationsRequired) return decision(best, second, State.CONFIRMING, verified, searchPath)
-        confirmedKey = best.reference.key
+        confirmedKey = best.reference.groupKey
         return Decision(best, best, second, State.CONFIRMED, pendingCount, confirmationsRequired, index.size, verified, searchPath)
     }
 
@@ -272,15 +275,20 @@ class OrbPageMatcher(
         pendingCount = 0
     }
 
+    private fun aggregate(scores: List<Score>) = LayeredSearchPlanner.aggregateBySpread(
+        scores, { it.reference.groupKey }, Score::inliers, Score::goodMatches,
+    )
+
     private fun decision(best: Score?, second: Score?, state: State, verified: Int, searchPath: SearchPath) =
         Decision(null, best, second, state, pendingCount, confirmationsRequired, index.size, verified, searchPath)
 
-    private fun Reference.planningCandidate() = LayeredSearchPlanner.Candidate(key, bookId, spreadOrdinal)
+    private fun Reference.planningCandidate() = LayeredSearchPlanner.Candidate(key, bookId, spreadOrdinal, groupKey)
 
     private fun IndexedReference.planningCandidate() = LayeredSearchPlanner.Candidate(
         reference.key,
         reference.bookId,
         reference.spreadOrdinal,
+        reference.groupKey,
     )
 
     override fun close() {

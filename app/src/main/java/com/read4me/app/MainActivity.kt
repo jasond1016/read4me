@@ -37,7 +37,12 @@ class MainActivity : ComponentActivity() {
         data class Recording(val title: String) : Destination
         data class Review(val book: StoryBook, val initialUndo: StoryBook? = null, val undoImage: java.io.File? = null) : Destination
         data class Rerecord(val book: StoryBook, val spreadId: String) : Destination
-        data class Recapture(val book: StoryBook, val spreadId: String) : Destination
+        data class Recapture(
+            val book: StoryBook,
+            val spreadId: String,
+            val undo: StoryBook?,
+            val undoImage: java.io.File?,
+        ) : Destination
         data class InsertSpread(val book: StoryBook, val anchorSpreadId: String, val undo: StoryBook?, val undoImage: java.io.File?) : Destination
     }
 
@@ -166,8 +171,8 @@ class MainActivity : ComponentActivity() {
                                 permissionLauncher.launch(arrayOf(Manifest.permission.RECORD_AUDIO))
                             }
                         },
-                        onRecapture = { updatedBook, spreadId ->
-                            val target = Destination.Recapture(updatedBook, spreadId)
+                        onRecapture = { updatedBook, spreadId, undo, undoImage ->
+                            val target = Destination.Recapture(updatedBook, spreadId, undo, undoImage)
                             if (hasCameraPermission()) destination = target
                             else {
                                 permissionTarget = target
@@ -205,10 +210,10 @@ class MainActivity : ComponentActivity() {
                         book = current.book,
                         spreadId = current.spreadId,
                         repository = repository,
-                        onCancel = { destination = Destination.Review(current.book) },
-                        onFinished = { updated ->
+                        onCancel = { destination = Destination.Review(current.book, current.undo, current.undoImage) },
+                        onFinished = { updated, previous, image ->
                             books = repository.loadAll()
-                            destination = Destination.Review(updated)
+                            destination = Destination.Review(updated, previous, image)
                         },
                     )
 

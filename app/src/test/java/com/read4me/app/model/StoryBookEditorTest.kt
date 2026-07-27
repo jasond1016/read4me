@@ -3,8 +3,24 @@ package com.read4me.app.model
 import org.junit.Assert.assertEquals
 import org.junit.Test
 import java.io.File
+import com.read4me.app.model.SpreadReference
 
 class StoryBookEditorTest {
+    @Test fun referenceAddDeleteLastRejectionPrimaryAndSpreadReorderPreserveReferences() {
+        val original = SpreadReference(File("one.jpg"), referenceId = "r1")
+        val added = SpreadReference(File("two.jpg"), referenceId = "r2")
+        val source = book().copy(markers = book().markers.mapIndexed { i, marker ->
+            if (i == 0) marker.copy(references = listOf(original)) else marker
+        })
+        val withTwo = StoryBookEditor.addReference(source, "one", added)
+        assertEquals(listOf("r1", "r2"), withTwo.markers[0].references.map { it.referenceId })
+        val primary = StoryBookEditor.setPrimaryReference(withTwo, "one", "r2")
+        assertEquals(listOf("r2", "r1"), primary.markers[0].references.map { it.referenceId })
+        val one = StoryBookEditor.deleteReference(primary, "one", "r1")
+        assertEquals(one, StoryBookEditor.deleteReference(one, "one", "r2"))
+        val reordered = StoryBookEditor.reorder(primary, "one", 2)
+        assertEquals(listOf("r2", "r1"), reordered.markers[2].references.map { it.referenceId })
+    }
     @Test
     fun replacingReferencePreservesTimingAudioAndOtherMarkers() {
         val source = book()
@@ -81,7 +97,7 @@ class StoryBookEditorTest {
     @Test fun insertSplitsAllocationWithoutGapOrOverlapAndDeleteLeavesItUnassigned() {
         val source = book()
         val inserted = StoryBookEditor.insertAfter(source, "one", 500L,
-            SpreadMarker(0L, File("new.jpg"), MarkerSource.MANUAL, spreadId = "new"))
+            SpreadMarker(0L, MarkerSource.MANUAL, listOf(SpreadReference(File("new.jpg"))), spreadId = "new"))
         assertEquals(500L, inserted.markers[0].recordingEndMs)
         assertEquals(500L, inserted.markers[1].recordingStartMs)
         assertEquals(1_000L, inserted.markers[1].recordingEndMs)
@@ -92,7 +108,7 @@ class StoryBookEditorTest {
 
     @Test fun insertRejectsTooShortMissingAndDuplicateAnchorsButAllowsOverrideDonor() {
         val source = book()
-        val marker = SpreadMarker(0L, File("new.jpg"), MarkerSource.MANUAL, spreadId = "new")
+        val marker = SpreadMarker(0L, MarkerSource.MANUAL, listOf(SpreadReference(File("new.jpg"))), spreadId = "new")
         assertEquals(source, StoryBookEditor.insertAfter(source, "missing", 500L, marker))
         assertEquals(source, StoryBookEditor.insertAfter(source, "one", 499L, marker))
         assertEquals(source, StoryBookEditor.insertAfter(source, "one", 501L, source.markers[1]))
@@ -110,7 +126,7 @@ class StoryBookEditorTest {
             if (i == 0) marker.copy(trimStartMs = 700L, trimEndMs = 900L) else marker
         })
         val inserted = StoryBookEditor.insertAfter(source, "one", 500L,
-            SpreadMarker(0L, null, MarkerSource.MANUAL, spreadId = "suffix"))
+            SpreadMarker(0L, MarkerSource.MANUAL, emptyList(), spreadId = "suffix"))
         assertEquals(3 + 1, inserted.spreads.size)
         assertEquals(0L to 500L, inserted.spreads.first().startMs to inserted.spreads.first().endMs)
         assertEquals("suffix", inserted.markers[1].spreadId)
@@ -123,7 +139,7 @@ class StoryBookEditorTest {
             if (i == 0) marker.copy(overrideAudioFile = override, overrideDurationMs = 900L, trimStartMs = 100L, trimEndMs = 800L) else marker
         })
         val inserted = StoryBookEditor.insertAfter(source, "one", 500L,
-            SpreadMarker(0L, null, MarkerSource.MANUAL, spreadId = "suffix"))
+            SpreadMarker(0L, MarkerSource.MANUAL, emptyList(), spreadId = "suffix"))
         assertEquals(100L to 800L, inserted.markers[0].trimStartMs to inserted.markers[0].trimEndMs)
         assertEquals(override, inserted.spreads[0].audioFile)
         assertEquals(source.audioFile, inserted.spreads[1].audioFile)
@@ -140,7 +156,7 @@ class StoryBookEditorTest {
     @Test fun insertionAllocatesExactlyTheAnchorBaseRange() {
         val source = book()
         val inserted = StoryBookEditor.insertAfter(source, "two", 1_500L,
-            SpreadMarker(0L, null, MarkerSource.MANUAL, spreadId = "new"))
+            SpreadMarker(0L, MarkerSource.MANUAL, emptyList(), spreadId = "new"))
         assertEquals(listOf(1_000L to 1_500L, 1_500L to 2_000L),
             inserted.markers.slice(1..2).map { it.recordingStartMs to it.recordingEndMs })
         assertEquals(MarkerSource.MANUAL, inserted.markers[2].source)
@@ -164,9 +180,9 @@ class StoryBookEditorTest {
         audioFile = File("recording.m4a"),
         durationMs = 2_000L,
         markers = listOf(
-            SpreadMarker(0L, null, MarkerSource.INITIAL, spreadId = "one", recordingStartMs = 0L, recordingEndMs = 1_000L),
-            SpreadMarker(1_000L, null, MarkerSource.MANUAL, spreadId = "two", recordingStartMs = 1_000L, recordingEndMs = 2_000L),
-            SpreadMarker(2_000L, null, MarkerSource.MANUAL, spreadId = "three", recordingStartMs = 2_000L, recordingEndMs = 2_500L),
+            SpreadMarker(0L, MarkerSource.INITIAL, emptyList(), spreadId = "one", recordingStartMs = 0L, recordingEndMs = 1_000L),
+            SpreadMarker(1_000L, MarkerSource.MANUAL, emptyList(), spreadId = "two", recordingStartMs = 1_000L, recordingEndMs = 2_000L),
+            SpreadMarker(2_000L, MarkerSource.MANUAL, emptyList(), spreadId = "three", recordingStartMs = 2_000L, recordingEndMs = 2_500L),
         ),
     )
 }

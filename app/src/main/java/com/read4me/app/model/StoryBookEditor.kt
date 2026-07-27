@@ -7,7 +7,28 @@ object StoryBookEditor {
     private fun index(book: StoryBook, id: String) = book.markers.indexOfFirst { it.spreadId == id }
 
     fun replaceReference(book: StoryBook, spreadId: String, imageFile: File, fingerprint: ByteArray? = null, fingerprintVersion: Int = 2) =
-        update(book, spreadId) { it.copy(imageFile = imageFile, fingerprint = fingerprint?.copyOf(), fingerprintVersion = fingerprintVersion) }
+        update(book, spreadId) { marker ->
+            val reference = SpreadReference(imageFile, fingerprint?.copyOf(), fingerprintVersion)
+            marker.copy(references = listOf(reference))
+        }
+
+    fun addReference(book: StoryBook, spreadId: String, reference: SpreadReference) =
+        update(book, spreadId) { it.copy(references = it.references + reference) }
+
+    fun deleteReference(book: StoryBook, spreadId: String, referenceId: String) = update(book, spreadId) { marker ->
+        if (marker.references.size <= 1 || marker.references.none { it.referenceId == referenceId }) marker
+        else marker.copy(references = marker.references.filterNot { it.referenceId == referenceId })
+    }
+
+    fun setPrimaryReference(book: StoryBook, spreadId: String, referenceId: String) = update(book, spreadId) { marker ->
+        val selected = marker.references.firstOrNull { it.referenceId == referenceId } ?: return@update marker
+        marker.copy(references = listOf(selected) + marker.references.filterNot { it.referenceId == referenceId })
+    }
+
+    fun updateReferenceQuality(book: StoryBook, spreadId: String, referenceId: String, quality: PhotoQuality) =
+        update(book, spreadId) { marker ->
+            marker.copy(references = marker.references.map { if (it.referenceId == referenceId) it.copy(quality = quality) else it })
+        }
 
     fun moveBoundary(book: StoryBook, leftId: String, rightId: String, timestampMs: Long): StoryBook {
         val left = index(book, leftId); val right = index(book, rightId)

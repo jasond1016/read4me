@@ -78,6 +78,8 @@ import com.read4me.app.audio.StoryAudioRecorder
 import com.read4me.app.data.StoryRepository
 import com.read4me.app.model.MarkerSource
 import com.read4me.app.model.SpreadMarker
+import com.read4me.app.model.SpreadReference
+import com.read4me.app.model.PhotoQuality
 import com.read4me.app.model.StoryBook
 import com.read4me.app.model.StoryBookEditor
 import com.read4me.app.model.StoryEditSession
@@ -86,6 +88,7 @@ import com.read4me.app.vision.CameraFrameAnalyzer
 import com.read4me.app.vision.LayeredSearchPlanner
 import com.read4me.app.vision.OrbPageMatcher
 import com.read4me.app.vision.PageTurnDetector
+import com.read4me.app.vision.PhotoQualityAnalyzer
 import com.read4me.app.vision.VisualFingerprint
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
@@ -377,10 +380,8 @@ fun RecordingScreen(
         val imageFile = repository.imageFile(draft, spreadId)
         markers += SpreadMarker(
             timestampMs = timestamp,
-            imageFile = imageFile,
             source = source,
-            fingerprint = latestFingerprint?.copyOf(),
-            fingerprintVersion = 2,
+            references = listOf(SpreadReference(imageFile, latestFingerprint?.copyOf(), 2)),
             spreadId = spreadId,
         )
         pendingCaptures += spreadId
@@ -569,9 +570,9 @@ fun ChildReadingScreen(books: List<StoryBook>, onExit: () -> Unit) {
     }
     val orbReferences = remember(books) {
         books.flatMap { book ->
-            book.spreads.mapNotNull { spread ->
-                spread.imageFile?.takeIf(File::exists)?.let {
-                    OrbPageMatcher.Reference(book.id, spread.ordinal, spread.spreadId, it)
+            book.spreads.flatMap { spread ->
+                spread.references.filter { it.file.exists() }.map { reference ->
+                    OrbPageMatcher.Reference(book.id, spread.ordinal, spread.spreadId, reference.file, reference.referenceId)
                 }
             }
         }
@@ -663,7 +664,7 @@ fun ChildReadingScreen(books: List<StoryBook>, onExit: () -> Unit) {
                     }
                 }
                 currentDecision?.confirmed?.let {
-                    spreadsByKey[it.reference.key]?.let { (book, spread) ->
+                    spreadsByKey[it.reference.groupKey]?.let { (book, spread) ->
                         val isCurrentSpread = currentBook?.id == book.id && currentSpread?.spreadId == spread.spreadId
                         when {
                             isCurrentSpread && pausedForPageChange && player.resume() -> {
@@ -845,7 +846,7 @@ fun RecaptureScreen(
     spreadId: String,
     repository: StoryRepository,
     onCancel: () -> Unit,
-    onFinished: (StoryBook) -> Unit,
+    onFinished: (StoryBook, StoryBook, File) -> Unit,
 ) {
     val marker = book.markers.firstOrNull { it.spreadId == spreadId }
     val ordinal = book.markers.indexOfFirst { it.spreadId == spreadId } + 1
@@ -908,7 +909,7 @@ fun RecaptureScreen(
                     Modifier.padding(24.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
-                    Text("重拍书面 $ordinal", style = MaterialTheme.typography.headlineLarge)
+                    Text("添加书面 $ordinal 的参考照片", style = MaterialTheme.typography.headlineLarge)
                     Text(message, modifier = Modifier.padding(top = 8.dp, bottom = 18.dp))
                     Button(
                         enabled = !isCapturing,
@@ -928,22 +929,28 @@ fun RecaptureScreen(
                                 object : ImageCapture.OnImageSavedCallback {
                                     override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
                                         if (activeToken != token) { captureFile.delete(); return }
-                                        var installed: File? = null
-                                        runCatching {
-                                            val target = repository.replaceReferenceImage(book, spreadId, captureFile)
-                                            installed = target
-                                            val updated = StoryBookEditor.replaceReference(
-                                                book,
-                                                spreadId,
-                                                target,
-                                                capturedFingerprint,
-                                            )
-                                            repository.save(updated)
-                                            updated
-                                        }.onSuccess(onFinished).onFailure {
-                                            installed?.delete()
-                                            isCapturing = false
-                                            message = "替换失败，原照片已保留，请重试"
+                                        message = "正在检查照片质量……"
+                                        analysisExecutor.execute {
+                                            val quality = PhotoQualityAnalyzer.analyze(captureFile)
+                                            mainExecutor.execute {
+                                                if (activeToken != token) {
+                                                    captureFile.delete()
+                                                    return@execute
+                                                }
+                                                var installed: File? = null
+                                                runCatching {
+                                                    val target = repository.replaceReferenceImage(book, spreadId, captureFile)
+                                                    installed = target
+                                                    val updated = StoryBookEditor.addReference(book, spreadId,
+                                                        SpreadReference(target, capturedFingerprint, 2, quality))
+                                                    repository.save(updated)
+                                                    updated
+                                                }.onSuccess { updated -> onFinished(updated, book, requireNotNull(installed)) }.onFailure {
+                                                    installed?.delete()
+                                                    isCapturing = false
+                                                    message = "添加失败，原照片已保留，请重试"
+                                                }
+                                            }
                                         }
                                     }
 
@@ -958,7 +965,7 @@ fun RecaptureScreen(
                         },
                         modifier = Modifier.fillMaxWidth().height(56.dp),
                         shape = RoundedCornerShape(18.dp),
-                    ) { Text(if (isCapturing) "保存中" else "拍下并替换") }
+                    ) { Text(if (isCapturing) "分析并保存中" else "拍下并添加") }
                     TextButton(enabled = !isCapturing, onClick = onCancel) { Text("取消") }
                 }
             }
@@ -1079,8 +1086,9 @@ fun InsertSpreadScreen(
                     val newId = UUID.randomUUID().toString()
                     installed = repository.installInsertImage(book, newId, requireNotNull(pendingFile))
                     val updated = StoryBookEditor.insertAfter(book, anchorSpreadId, split.toLong(), SpreadMarker(
-                        timestampMs = split.toLong(), imageFile = installed, source = MarkerSource.MANUAL,
-                        fingerprint = capturedFingerprint?.copyOf(), fingerprintVersion = 2, spreadId = newId,
+                        timestampMs = split.toLong(), source = MarkerSource.MANUAL,
+                        references = listOf(SpreadReference(requireNotNull(installed), capturedFingerprint?.copyOf(), 2)),
+                        spreadId = newId,
                     ))
                     check(updated !== book)
                     repository.save(updated)
@@ -1205,7 +1213,7 @@ fun ReviewScreen(
     book: StoryBook,
     repository: StoryRepository,
     onRerecord: (StoryBook, String) -> Unit,
-    onRecapture: (StoryBook, String) -> Unit,
+    onRecapture: (StoryBook, String, StoryBook?, File?) -> Unit,
     onInsert: (StoryBook, String, StoryBook?, File?) -> Unit,
     initialUndo: StoryBook? = null,
     initialUndoImage: File? = null,
@@ -1277,7 +1285,9 @@ fun ReviewScreen(
                     player.stop()
                     playingSpreadId = null
                     editableBook = editSession.undo(repository::save)
-                    undoImage?.takeIf { image -> editableBook.markers.none { it.imageFile == image } }?.delete()
+                    undoImage?.takeIf { image ->
+                        editableBook.markers.none { marker -> marker.references.any { it.file == image } }
+                    }?.delete()
                     undoImage = null
                 }) { Text("撤销上一步") }
             }
@@ -1315,7 +1325,11 @@ fun ReviewScreen(
                         { mergeWithNext(spread.spreadId) }
                     } else null,
                     onRerecord = { onRerecord(editableBook, spread.spreadId) },
-                    onRecapture = { onRecapture(editableBook, spread.spreadId) },
+                    onRecapture = {
+                        onRecapture(editableBook, spread.spreadId, editSession.undoSnapshot, undoImage)
+                    },
+                    onDeleteReference = { referenceId -> editableBook = editSession.apply(StoryBookEditor.deleteReference(editableBook, spread.spreadId, referenceId), repository::save) },
+                    onSetPrimary = { referenceId -> editableBook = editSession.apply(StoryBookEditor.setPrimaryReference(editableBook, spread.spreadId, referenceId), repository::save) },
                     onMoveUp = if (spread.ordinal > 1) {{ editableBook = editSession.apply(StoryBookEditor.reorder(editableBook, spread.spreadId, spread.ordinal - 2), repository::save) }} else null,
                     onMoveDown = if (spread.ordinal < editableBook.spreads.size) {{ editableBook = editSession.apply(StoryBookEditor.reorder(editableBook, spread.spreadId, spread.ordinal), repository::save) }} else null,
                     onDelete = if (editableBook.markers.size > 1) {{ editableBook = editSession.apply(StoryBookEditor.delete(editableBook, spread.spreadId), repository::save) }} else null,
@@ -1379,6 +1393,8 @@ private fun SpreadReviewCard(
     onMergeNext: (() -> Unit)?,
     onRerecord: () -> Unit,
     onRecapture: () -> Unit,
+    onDeleteReference: (String) -> Unit,
+    onSetPrimary: (String) -> Unit,
     onMoveUp: (() -> Unit)?,
     onMoveDown: (() -> Unit)?,
     onDelete: (() -> Unit)?,
@@ -1421,6 +1437,8 @@ private fun SpreadReviewCard(
                     color = Ink.copy(alpha = 0.58f),
                     modifier = Modifier.padding(top = 4.dp),
                 )
+                Text("${spread.references.size} 张参考照片 · ${qualityLabel(spread.references.firstOrNull()?.quality)}",
+                    style = MaterialTheme.typography.bodyMedium, color = Ink.copy(alpha = .68f))
                 OutlinedButton(
                     onClick = onPlay,
                     shape = RoundedCornerShape(14.dp),
@@ -1430,7 +1448,25 @@ private fun SpreadReviewCard(
                 TextButton(
                     onClick = onRecapture,
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                ) { Text("重拍书面") }
+                ) { Text("添加参考照片") }
+            }
+        }
+        if (spread.references.isNotEmpty()) {
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp)) {
+                spread.references.forEachIndexed { index, reference ->
+                    Column(Modifier.padding(end = 8.dp)) {
+                        StoryImage(
+                            file = reference.file,
+                            modifier = Modifier.size(width = 96.dp, height = 72.dp).clip(RoundedCornerShape(10.dp)),
+                        )
+                        Text("照片 ${index + 1}${if (index == 0) "（主图）" else ""}")
+                        Text(qualityLabel(reference.quality), style = MaterialTheme.typography.bodyMedium)
+                        if (index > 0) TextButton(onClick = { onSetPrimary(reference.referenceId) }) { Text("设为主图") }
+                        if (spread.references.size > 1) {
+                            TextButton(onClick = { onDeleteReference(reference.referenceId) }) { Text("删除") }
+                        }
+                    }
+                }
             }
         }
         if (trimRange.endInclusive - trimRange.start >= 500f) {
@@ -1672,4 +1708,18 @@ private fun recognitionDiagnostic(decision: OrbPageMatcher.Decision): String {
     }
     val search = "索引 ${decision.indexedReferences} · 几何 ${decision.geometricallyVerified} · $path"
     return "$bestText$secondText · $state · $search"
+}
+
+private fun qualityLabel(quality: PhotoQuality?): String = when (quality?.status) {
+    null -> "尚未检查"
+    PhotoQuality.Status.GOOD -> "质量良好"
+    PhotoQuality.Status.UNAVAILABLE -> "无法检查"
+    PhotoQuality.Status.ISSUES -> "建议重拍：" + quality.issues.joinToString("、") {
+        when (it) {
+            PhotoQuality.Issue.BLURRY -> "模糊"
+            PhotoQuality.Issue.TOO_FEW_DETAILS -> "细节过少"
+            PhotoQuality.Issue.TOO_DARK -> "过暗"
+            PhotoQuality.Issue.OVEREXPOSED -> "过曝"
+        }
+    }
 }
