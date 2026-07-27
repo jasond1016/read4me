@@ -15,6 +15,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import com.read4me.app.data.StoryRepository
+import com.read4me.app.audio.PersistentWaveformCache
 import com.read4me.app.model.StoryBook
 import com.read4me.app.ui.LibraryScreen
 import com.read4me.app.ui.InsertSpreadScreen
@@ -24,6 +25,7 @@ import com.read4me.app.ui.RerecordScreen
 import com.read4me.app.ui.RecaptureScreen
 import com.read4me.app.ui.ReviewScreen
 import com.read4me.app.ui.SetupScreen
+import com.read4me.app.ui.StoryImageLoader
 import com.read4me.app.ui.ChildReadingScreen
 import com.read4me.app.vision.RecognitionHistoryStore
 import kotlinx.coroutines.Dispatchers
@@ -195,6 +197,11 @@ class MainActivity : ComponentActivity() {
                             recognitionHistory.clear()
                             recognitionSummaries = emptyList()
                             archiveMessage = "识别记录已清除"
+                        },
+                        onClearMediaCache = {
+                            PersistentWaveformCache(java.io.File(cacheDir, "read4me/waveforms")).clear()
+                            StoryImageLoader.clearDisk(this@MainActivity)
+                            archiveMessage = "波形和缩略图缓存已清除"
                         },
                     )
 

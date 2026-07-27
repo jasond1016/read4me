@@ -73,7 +73,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.read4me.app.audio.AudioSegmentPlayer
-import com.read4me.app.audio.AudioWaveformExtractor
+import com.read4me.app.audio.PersistentWaveformCache
 import com.read4me.app.audio.StoryAudioRecorder
 import com.read4me.app.data.StoryRepository
 import com.read4me.app.model.MarkerSource
@@ -123,6 +123,7 @@ fun LibraryScreen(
     onImportLibrary: () -> Unit,
     onExportLibrary: () -> Unit,
     onClearRecognitionHistory: () -> Unit,
+    onClearMediaCache: () -> Unit,
 ) {
     Surface(Modifier.fillMaxSize(), color = Paper) {
         LazyColumn(
@@ -163,6 +164,9 @@ fun LibraryScreen(
                     OutlinedButton(onClick = onImportLibrary, modifier = Modifier.weight(1f)) {
                         Text("恢复整库")
                     }
+                }
+                TextButton(onClick = onClearMediaCache, modifier = Modifier.fillMaxWidth()) {
+                    Text("清除波形和缩略图缓存")
                 }
                 archiveMessage?.let {
                     Text(it, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 6.dp))
@@ -1165,6 +1169,9 @@ fun InsertSpreadScreen(
         return
     }
     val context = LocalContext.current
+    val persistentWaveforms = remember(context.cacheDir) {
+        PersistentWaveformCache(File(context.cacheDir, "read4me/waveforms"))
+    }
     val lifecycleOwner = LocalLifecycleOwner.current
     val mainExecutor = remember { ContextCompat.getMainExecutor(context) }
     val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
@@ -1210,7 +1217,9 @@ fun InsertSpreadScreen(
     }
     LaunchedEffect(photoReady) {
         if (photoReady && waveform == null) waveform = withContext(Dispatchers.IO) {
-            runCatching { AudioWaveformExtractor().extract(book.audioFile, anchor.recordingStartMs, anchor.recordingEndMs) }.getOrNull()
+            runCatching {
+                persistentWaveforms.loadOrExtract(book.audioFile, anchor.recordingStartMs, anchor.recordingEndMs)
+            }.getOrNull()
         }
     }
     Surface(Modifier.fillMaxSize(), color = if (photoReady) Paper else Ink) {
@@ -1398,6 +1407,10 @@ fun ReviewScreen(
     onBack: () -> Unit,
 ) {
     val player = remember { AudioSegmentPlayer() }
+    val context = LocalContext.current
+    val persistentWaveforms = remember(context.cacheDir) {
+        PersistentWaveformCache(File(context.cacheDir, "read4me/waveforms"))
+    }
     val editSession = remember(book.id, book.markers.map { it.spreadId }) { StoryEditSession(book, initialUndo) }
     var editableBook by remember(book.id) { mutableStateOf(book) }
     var undoImage by remember(book.id) { mutableStateOf(initialUndoImage) }
@@ -1412,7 +1425,7 @@ fun ReviewScreen(
             if (waveformCache[key] == null) {
                 waveformCache[key] = withContext(Dispatchers.IO) {
                     runCatching {
-                        AudioWaveformExtractor().extract(spread.audioFile, key.startMs, key.endMs)
+                        persistentWaveforms.loadOrExtract(spread.audioFile, key.startMs, key.endMs)
                     }.getOrElse { FloatArray(0) }
                 }
             }
@@ -1824,13 +1837,14 @@ private fun allocateRecordingRanges(markers: List<SpreadMarker>, durationMs: Lon
 
 @Composable
 private fun StoryImage(file: File?, modifier: Modifier = Modifier) {
+    val context = LocalContext.current
     val imageKey = file?.let { "${it.absolutePath}:${it.lastModified()}:${it.length()}" }
     var bitmap by remember(imageKey) {
         mutableStateOf(file?.let(StoryImageLoader::cached))
     }
     LaunchedEffect(imageKey) {
         if (bitmap == null && file != null) {
-            bitmap = withContext(Dispatchers.IO) { StoryImageLoader.load(file) }
+            bitmap = withContext(Dispatchers.IO) { StoryImageLoader.load(context.applicationContext, file) }
         }
     }
     val currentBitmap = bitmap
