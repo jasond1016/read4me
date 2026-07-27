@@ -8,6 +8,7 @@ import java.io.File
 class AudioSegmentPlayer {
     private val handler = Handler(Looper.getMainLooper())
     private var player: MediaPlayer? = null
+    private var segmentStartMs = 0L
     private var segmentEndMs = 0L
     private var onFinished: (() -> Unit)? = null
     private var prepared = false
@@ -18,6 +19,7 @@ class AudioSegmentPlayer {
         stop()
         if (!file.exists() || endMs <= startMs) return
 
+        segmentStartMs = startMs
         segmentEndMs = endMs
         this.onFinished = onFinished
         val nextPlayer = MediaPlayer().apply {
@@ -54,6 +56,15 @@ class AudioSegmentPlayer {
         return true
     }
 
+    fun progress(): Float? {
+        val activePlayer = player ?: return null
+        if (!prepared || segmentEndMs <= segmentStartMs) return null
+        return runCatching {
+            ((activePlayer.currentPosition - segmentStartMs).toFloat() / (segmentEndMs - segmentStartMs))
+                .coerceIn(0f, 1f)
+        }.getOrNull()
+    }
+
     fun stop() {
         handler.removeCallbacks(finishRunnable)
         player?.let {
@@ -61,6 +72,7 @@ class AudioSegmentPlayer {
             it.release()
         }
         player = null
+        segmentStartMs = 0L
         segmentEndMs = 0L
         onFinished = null
         prepared = false

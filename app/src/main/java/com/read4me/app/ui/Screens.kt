@@ -7,6 +7,11 @@ import androidx.camera.core.ImageCaptureException
 import androidx.camera.view.CameraController
 import androidx.camera.view.LifecycleCameraController
 import androidx.camera.view.PreviewView
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -38,6 +43,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -63,6 +69,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.input.pointer.pointerInput
@@ -472,6 +479,138 @@ private fun BookGuideFrame(active: Boolean, modifier: Modifier = Modifier) {
     )
 }
 
+private enum class ChildReadingPhase {
+    NO_BOOKS,
+    LOOKING,
+    CONFIRMING,
+    PLAYING,
+    PAUSED,
+    MOVED,
+    FINISHED,
+}
+
+@Composable
+private fun ChildReadingStatus(
+    phase: ChildReadingPhase,
+    status: String,
+    book: StoryBook?,
+    spread: StorySpread?,
+    progress: Float,
+) {
+    val pulse = rememberInfiniteTransition(label = "readingPulse")
+    val pulseScale by pulse.animateFloat(
+        initialValue = 0.92f,
+        targetValue = 1.08f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 850),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "readingPulseScale",
+    )
+    val accent = when (phase) {
+        ChildReadingPhase.PLAYING -> Coral
+        ChildReadingPhase.FINISHED -> Moss
+        ChildReadingPhase.MOVED -> Honey
+        ChildReadingPhase.PAUSED -> Honey
+        ChildReadingPhase.CONFIRMING -> Color(0xFF6B7FA3)
+        ChildReadingPhase.NO_BOOKS,
+        ChildReadingPhase.LOOKING -> Ink.copy(alpha = 0.5f)
+    }
+    val symbol = when (phase) {
+        ChildReadingPhase.PLAYING -> "♪"
+        ChildReadingPhase.FINISHED -> "↪"
+        ChildReadingPhase.MOVED -> "↩"
+        ChildReadingPhase.PAUSED -> "Ⅱ"
+        ChildReadingPhase.CONFIRMING -> "…"
+        ChildReadingPhase.NO_BOOKS -> "!"
+        ChildReadingPhase.LOOKING -> "⌖"
+    }
+
+    Row(
+        Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        Box(
+            Modifier
+                .size(width = 94.dp, height = 72.dp)
+                .clip(RoundedCornerShape(18.dp))
+                .background(accent.copy(alpha = 0.14f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (spread?.imageFile != null) {
+                StoryImage(
+                    spread.imageFile,
+                    Modifier
+                        .fillMaxSize()
+                        .graphicsLayer { alpha = if (phase == ChildReadingPhase.MOVED) 0.55f else 1f },
+                )
+            } else {
+                Text(
+                    symbol,
+                    color = accent,
+                    style = MaterialTheme.typography.headlineLarge,
+                    modifier = Modifier.graphicsLayer {
+                        val scale = if (phase == ChildReadingPhase.PLAYING) pulseScale else 1f
+                        scaleX = scale
+                        scaleY = scale
+                    },
+                )
+            }
+            if (spread?.imageFile != null) {
+                Surface(
+                    color = accent,
+                    shape = CircleShape,
+                    modifier = Modifier.align(Alignment.BottomEnd).padding(5.dp).size(28.dp),
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Text(
+                            symbol,
+                            color = Color.White,
+                            style = MaterialTheme.typography.titleMedium,
+                            modifier = Modifier.graphicsLayer {
+                                val scale = if (phase == ChildReadingPhase.PLAYING) pulseScale else 1f
+                                scaleX = scale
+                                scaleY = scale
+                            },
+                        )
+                    }
+                }
+            }
+        }
+        Column(Modifier.weight(1f)) {
+            Text(status, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+            if (book != null && spread != null) {
+                Text(
+                    if (phase == ChildReadingPhase.MOVED) {
+                        "刚才是《${book.title}》 · 第 ${spread.ordinal} 个书面"
+                    } else {
+                        "《${book.title}》 · 第 ${spread.ordinal} 个书面"
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Ink.copy(alpha = 0.58f),
+                    maxLines = 1,
+                )
+            }
+        }
+    }
+    val showsProgress = when (phase) {
+        ChildReadingPhase.PLAYING,
+        ChildReadingPhase.PAUSED,
+        ChildReadingPhase.MOVED,
+        ChildReadingPhase.FINISHED -> true
+        else -> false
+    }
+    if (spread != null && showsProgress) {
+        LinearProgressIndicator(
+            progress = { progress.coerceIn(0f, 1f) },
+            modifier = Modifier.fillMaxWidth().padding(top = 14.dp).height(6.dp).clip(CircleShape),
+            color = accent,
+            trackColor = accent.copy(alpha = 0.16f),
+        )
+    }
+}
+
 @Composable
 fun RecordingScreen(
     title: String,
@@ -731,6 +870,18 @@ fun ChildReadingScreen(
     var choosingManualSpread by remember { mutableStateOf(false) }
     var manualCorrection by remember { mutableStateOf(false) }
     var parentMode by remember { mutableStateOf(false) }
+    var readingPhase by remember {
+        mutableStateOf(if (orbReferences.isEmpty()) ChildReadingPhase.NO_BOOKS else ChildReadingPhase.LOOKING)
+    }
+    var phaseBeforeConfirmation by remember { mutableStateOf(ChildReadingPhase.LOOKING) }
+    var playbackProgress by remember { mutableFloatStateOf(0f) }
+
+    LaunchedEffect(isPlaying) {
+        while (isPlaying) {
+            player.progress()?.let { playbackProgress = it }
+            delay(250L)
+        }
+    }
 
     BackHandler {
         if (parentMode) {
@@ -749,10 +900,14 @@ fun ChildReadingScreen(
         recognitionContext.set(LayeredSearchPlanner.Context(book.id, spread.ordinal))
         inliers = geometricInliers
         isPlaying = true
-        status = "正在讲第 ${spread.ordinal} 个书面"
+        readingPhase = ChildReadingPhase.PLAYING
+        playbackProgress = 0f
+        status = "听故事"
         player.play(spread.audioFile, spread.startMs, spread.endMs) {
             isPlaying = false
-            status = "这一页讲完了，等你翻页"
+            readingPhase = ChildReadingPhase.FINISHED
+            playbackProgress = 1f
+            status = "讲完啦，请翻页"
         }
     }
 
@@ -762,7 +917,8 @@ fun ChildReadingScreen(
             if (isMoving && isPlaying && player.pause()) {
                 isPlaying = false
                 pausedForPageChange = true
-                status = "画面持续移动，音频已暂停；放回书面后会继续"
+                readingPhase = ChildReadingPhase.MOVED
+                status = "放回刚才的位置"
             }
         }
     }
@@ -815,17 +971,26 @@ fun ChildReadingScreen(
             mainExecutor.execute {
                 isMoving = result.isMoving
                 if (result.isMoving) {
-                    if (!isPlaying) status = "画面在移动，等放稳后继续识别……"
+                    if (!isPlaying && currentSpread == null) {
+                        readingPhase = ChildReadingPhase.LOOKING
+                        status = "把书放稳一点"
+                    }
                 } else if (result.pageTurned) {
                     if (isPlaying && player.pause()) {
                         isPlaying = false
                         pausedForPageChange = true
                     }
-                    status = "看到你翻页了，正在确认新书面……"
+                    if (readingPhase != ChildReadingPhase.CONFIRMING) {
+                        phaseBeforeConfirmation = readingPhase
+                    }
+                    readingPhase = ChildReadingPhase.CONFIRMING
+                    status = "正在找这一页"
                 }
                 val currentDecision = decision?.takeIf { recognitionContext.get() == evaluatedContext }
                 if (currentDecision != null) diagnostic = recognitionDiagnostic(currentDecision)
-                if (currentDecision != null && !isPlaying && !result.pageTurned) {
+                if (currentDecision != null && !isPlaying && !result.pageTurned && !pausedForPageChange &&
+                    readingPhase != ChildReadingPhase.PAUSED && readingPhase != ChildReadingPhase.FINISHED
+                ) {
                     status = when (currentDecision.state) {
                         OrbPageMatcher.State.NO_REFERENCES -> "没有可识别的参考照片"
                         OrbPageMatcher.State.TOO_FEW_FEATURES -> "画面细节太少，请把书放进白框"
@@ -833,6 +998,12 @@ fun ChildReadingScreen(
                         OrbPageMatcher.State.AMBIGUOUS -> "找到了相似页面，正在分辨"
                         OrbPageMatcher.State.CONFIRMING -> "正在确认书面……"
                         else -> status
+                    }
+                    readingPhase = when (currentDecision.state) {
+                        OrbPageMatcher.State.NO_REFERENCES -> ChildReadingPhase.NO_BOOKS
+                        OrbPageMatcher.State.CONFIRMING,
+                        OrbPageMatcher.State.AMBIGUOUS -> ChildReadingPhase.CONFIRMING
+                        else -> ChildReadingPhase.LOOKING
                     }
                 }
                 currentDecision?.confirmed?.let {
@@ -842,8 +1013,17 @@ fun ChildReadingScreen(
                             isCurrentSpread && pausedForPageChange && player.resume() -> {
                                 pausedForPageChange = false
                                 isPlaying = true
+                                readingPhase = ChildReadingPhase.PLAYING
                                 inliers = it.inliers
-                                status = "画面找回来了，继续讲第 ${spread.ordinal} 个书面"
+                                status = "继续听故事"
+                            }
+                            isCurrentSpread && readingPhase == ChildReadingPhase.CONFIRMING -> {
+                                readingPhase = phaseBeforeConfirmation
+                                status = when (phaseBeforeConfirmation) {
+                                    ChildReadingPhase.FINISHED -> "讲完啦，请翻页"
+                                    ChildReadingPhase.PAUSED -> "休息一下"
+                                    else -> status
+                                }
                             }
                             !isCurrentSpread -> {
                                 manualCorrection = false
@@ -905,22 +1085,13 @@ fun ChildReadingScreen(
                     Modifier.padding(horizontal = 24.dp, vertical = 22.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
-                    Box(
-                        Modifier.size(14.dp).background(if (isPlaying) Coral else Honey, CircleShape),
+                    ChildReadingStatus(
+                        phase = readingPhase,
+                        status = status,
+                        book = currentBook,
+                        spread = currentSpread,
+                        progress = playbackProgress,
                     )
-                    Text(
-                        status,
-                        style = MaterialTheme.typography.headlineMedium,
-                        modifier = Modifier.padding(top = 10.dp),
-                    )
-                    currentBook?.let {
-                        Text(
-                            "《${it.title}》 · 第 ${currentSpread?.ordinal ?: "-"} 个书面",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = Ink.copy(alpha = 0.58f),
-                            modifier = Modifier.padding(top = 5.dp),
-                        )
-                    }
                     currentSpread?.let { spread ->
                         Row(
                             Modifier.fillMaxWidth().padding(top = 16.dp),
@@ -929,22 +1100,40 @@ fun ChildReadingScreen(
                             OutlinedButton(
                                 onClick = {
                                     if (isPlaying) {
-                                        player.stop()
-                                        isPlaying = false
-                                        status = "暂停了，点继续从头听这一页"
+                                        if (player.pause()) {
+                                            isPlaying = false
+                                            pausedForPageChange = false
+                                            readingPhase = ChildReadingPhase.PAUSED
+                                            status = "休息一下"
+                                        }
+                                    } else if (readingPhase == ChildReadingPhase.PAUSED && player.resume()) {
+                                        isPlaying = true
+                                        readingPhase = ChildReadingPhase.PLAYING
+                                        status = "继续听故事"
                                     } else {
                                         currentBook?.let { play(it, spread, inliers) }
                                     }
                                 },
-                                modifier = Modifier.weight(1f).height(52.dp),
-                                shape = RoundedCornerShape(16.dp),
-                            ) { Text(if (isPlaying) "暂停" else "从头继续") }
+                                enabled = readingPhase != ChildReadingPhase.MOVED,
+                                modifier = Modifier.weight(1f).height(64.dp),
+                                shape = RoundedCornerShape(20.dp),
+                            ) {
+                                Text(
+                                    when {
+                                        isPlaying -> "Ⅱ  暂停一下"
+                                        readingPhase == ChildReadingPhase.PAUSED -> "▶  继续听"
+                                        readingPhase == ChildReadingPhase.MOVED -> "放回书面"
+                                        else -> "▶  再听一次"
+                                    },
+                                )
+                            }
                             Button(
                                 onClick = { currentBook?.let { play(it, spread, inliers) } },
-                                modifier = Modifier.weight(1f).height(52.dp),
-                                shape = RoundedCornerShape(16.dp),
+                                enabled = readingPhase != ChildReadingPhase.MOVED,
+                                modifier = Modifier.weight(1f).height(64.dp),
+                                shape = RoundedCornerShape(20.dp),
                                 colors = ButtonDefaults.buttonColors(containerColor = Moss),
-                            ) { Text("重新播放") }
+                            ) { Text("↻  从头听") }
                         }
                     }
                 }
