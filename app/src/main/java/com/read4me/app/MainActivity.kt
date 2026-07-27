@@ -17,6 +17,7 @@ import androidx.core.content.ContextCompat
 import com.read4me.app.data.StoryRepository
 import com.read4me.app.model.StoryBook
 import com.read4me.app.ui.LibraryScreen
+import com.read4me.app.ui.InsertSpreadScreen
 import com.read4me.app.ui.Read4MeTheme
 import com.read4me.app.ui.RecordingScreen
 import com.read4me.app.ui.RerecordScreen
@@ -34,9 +35,10 @@ class MainActivity : ComponentActivity() {
         data object Setup : Destination
         data object ChildReading : Destination
         data class Recording(val title: String) : Destination
-        data class Review(val book: StoryBook) : Destination
-        data class Rerecord(val book: StoryBook, val ordinal: Int) : Destination
-        data class Recapture(val book: StoryBook, val ordinal: Int) : Destination
+        data class Review(val book: StoryBook, val initialUndo: StoryBook? = null, val undoImage: java.io.File? = null) : Destination
+        data class Rerecord(val book: StoryBook, val spreadId: String) : Destination
+        data class Recapture(val book: StoryBook, val spreadId: String) : Destination
+        data class InsertSpread(val book: StoryBook, val anchorSpreadId: String, val undo: StoryBook?, val undoImage: java.io.File?) : Destination
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -155,8 +157,8 @@ class MainActivity : ComponentActivity() {
                     is Destination.Review -> ReviewScreen(
                         book = current.book,
                         repository = repository,
-                        onRerecord = { updatedBook, ordinal ->
-                            val target = Destination.Rerecord(updatedBook, ordinal)
+                        onRerecord = { updatedBook, spreadId ->
+                            val target = Destination.Rerecord(updatedBook, spreadId)
                             if (hasAudioPermission()) {
                                 destination = target
                             } else {
@@ -164,14 +166,24 @@ class MainActivity : ComponentActivity() {
                                 permissionLauncher.launch(arrayOf(Manifest.permission.RECORD_AUDIO))
                             }
                         },
-                        onRecapture = { updatedBook, ordinal ->
-                            val target = Destination.Recapture(updatedBook, ordinal)
+                        onRecapture = { updatedBook, spreadId ->
+                            val target = Destination.Recapture(updatedBook, spreadId)
                             if (hasCameraPermission()) destination = target
                             else {
                                 permissionTarget = target
                                 permissionLauncher.launch(arrayOf(Manifest.permission.CAMERA))
                             }
                         },
+                        onInsert = { updatedBook, anchorSpreadId, undo, undoImage ->
+                            val target = Destination.InsertSpread(updatedBook, anchorSpreadId, undo, undoImage)
+                            if (hasCameraPermission()) destination = target
+                            else {
+                                permissionTarget = target
+                                permissionLauncher.launch(arrayOf(Manifest.permission.CAMERA))
+                            }
+                        },
+                        initialUndo = current.initialUndo,
+                        initialUndoImage = current.undoImage,
                         onBack = {
                             books = repository.loadAll()
                             destination = Destination.Library
@@ -180,7 +192,7 @@ class MainActivity : ComponentActivity() {
 
                     is Destination.Rerecord -> RerecordScreen(
                         book = current.book,
-                        ordinal = current.ordinal,
+                        spreadId = current.spreadId,
                         repository = repository,
                         onCancel = { destination = Destination.Review(current.book) },
                         onFinished = { updated ->
@@ -191,12 +203,23 @@ class MainActivity : ComponentActivity() {
 
                     is Destination.Recapture -> RecaptureScreen(
                         book = current.book,
-                        ordinal = current.ordinal,
+                        spreadId = current.spreadId,
                         repository = repository,
                         onCancel = { destination = Destination.Review(current.book) },
                         onFinished = { updated ->
                             books = repository.loadAll()
                             destination = Destination.Review(updated)
+                        },
+                    )
+
+                    is Destination.InsertSpread -> InsertSpreadScreen(
+                        book = current.book,
+                        anchorSpreadId = current.anchorSpreadId,
+                        repository = repository,
+                        onCancel = { destination = Destination.Review(current.book, current.undo, current.undoImage) },
+                        onFinished = { updated, previous, image ->
+                            books = repository.loadAll()
+                            destination = Destination.Review(updated, previous, image)
                         },
                     )
                 }

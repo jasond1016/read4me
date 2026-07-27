@@ -33,6 +33,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -79,6 +80,7 @@ import com.read4me.app.model.MarkerSource
 import com.read4me.app.model.SpreadMarker
 import com.read4me.app.model.StoryBook
 import com.read4me.app.model.StoryBookEditor
+import com.read4me.app.model.StoryEditSession
 import com.read4me.app.model.StorySpread
 import com.read4me.app.vision.CameraFrameAnalyzer
 import com.read4me.app.vision.LayeredSearchPlanner
@@ -89,6 +91,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.UUID
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -354,7 +357,9 @@ fun RecordingScreen(
     val recorder = remember { StoryAudioRecorder(context) }
     val draft = remember { repository.createDraft(title) }
     val markers = remember { mutableStateListOf<SpreadMarker>() }
+    val pendingCaptures = remember { mutableStateListOf<String>() }
     var isRecording by remember { mutableStateOf(false) }
+    var initialCaptureReady by remember { mutableStateOf(false) }
     var isMoving by remember { mutableStateOf(false) }
     var motionScore by remember { mutableFloatStateOf(0f) }
     var elapsedMs by remember { mutableLongStateOf(0) }
@@ -368,24 +373,37 @@ fun RecordingScreen(
         if (source != MarkerSource.INITIAL && timestamp - (markers.lastOrNull()?.timestampMs ?: 0L) < 1_200L) {
             return
         }
-        val imageFile = repository.imageFile(draft, markers.size + 1)
+        val spreadId = UUID.randomUUID().toString()
+        val imageFile = repository.imageFile(draft, spreadId)
         markers += SpreadMarker(
             timestampMs = timestamp,
             imageFile = imageFile,
             source = source,
             fingerprint = latestFingerprint?.copyOf(),
             fingerprintVersion = 2,
+            spreadId = spreadId,
         )
+        pendingCaptures += spreadId
         controller.takePicture(
             ImageCapture.OutputFileOptions.Builder(imageFile).build(),
             mainExecutor,
             object : ImageCapture.OnImageSavedCallback {
                 override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
+                    pendingCaptures.remove(spreadId)
+                    if (source == MarkerSource.INITIAL) initialCaptureReady = true
                     captureMessage = if (source == MarkerSource.AUTOMATIC) "已自动记下新书面" else "已记下书面 ${markers.size}"
                 }
 
                 override fun onError(exception: ImageCaptureException) {
-                    captureMessage = "书面照片保存失败，录音仍在继续"
+                    pendingCaptures.remove(spreadId)
+                    markers.removeAll { it.spreadId == spreadId }
+                    imageFile.delete()
+                    if (source == MarkerSource.INITIAL) initialCaptureReady = false
+                    captureMessage = if (source == MarkerSource.INITIAL) {
+                        "首个书面保存失败，请重试首张书面"
+                    } else {
+                        "书面照片保存失败，录音仍在继续"
+                    }
                 }
             },
         )
@@ -399,7 +417,7 @@ fun RecordingScreen(
                 latestFingerprint = fingerprint
                 motionScore = result.motionScore
                 isMoving = result.isMoving
-                if (result.pageTurned && isRecording) captureMarker(MarkerSource.AUTOMATIC)
+                if (result.pageTurned && isRecording && initialCaptureReady) captureMarker(MarkerSource.AUTOMATIC)
             }
         }
         controller.setImageAnalysisAnalyzer(analysisExecutor, analyzer)
@@ -468,11 +486,16 @@ fun RecordingScreen(
                             horizontalArrangement = Arrangement.spacedBy(12.dp),
                         ) {
                             OutlinedButton(
-                                onClick = { captureMarker(MarkerSource.MANUAL) },
+                                enabled = pendingCaptures.isEmpty(),
+                                onClick = {
+                                    captureMarker(if (initialCaptureReady) MarkerSource.MANUAL else MarkerSource.INITIAL)
+                                },
                                 modifier = Modifier.weight(1f).height(54.dp),
                                 shape = RoundedCornerShape(17.dp),
-                            ) { Text("标记翻页") }
+                            ) { Text(if (initialCaptureReady) "标记翻页" else "重试首张书面") }
                             Button(
+                                enabled = initialCaptureReady && pendingCaptures.isEmpty() &&
+                                    elapsedMs > (markers.lastOrNull()?.timestampMs ?: Long.MAX_VALUE),
                                 onClick = {
                                     val duration = recorder.stop()
                                     isRecording = false
@@ -482,7 +505,7 @@ fun RecordingScreen(
                                         directory = draft.directory,
                                         audioFile = draft.audioFile,
                                         durationMs = duration,
-                                        markers = markers.toList(),
+                                        markers = allocateRecordingRanges(markers, duration),
                                     )
                                     repository.save(book)
                                     onFinished(book)
@@ -498,6 +521,7 @@ fun RecordingScreen(
                                 detector.reset()
                                 recorder.start(draft.audioFile)
                                 isRecording = true
+                                initialCaptureReady = false
                                 captureMessage = "正在保存第一个书面"
                                 captureMarker(MarkerSource.INITIAL)
                             },
@@ -541,13 +565,13 @@ fun ChildReadingScreen(books: List<StoryBook>, onExit: () -> Unit) {
     val detector = remember { PageTurnDetector() }
     val player = remember { AudioSegmentPlayer() }
     val spreadsByKey = remember(books) {
-        books.flatMap { book -> book.spreads.map { spread -> "${book.id}:${spread.ordinal}" to (book to spread) } }.toMap()
+        books.flatMap { book -> book.spreads.map { spread -> "${book.id}:${spread.spreadId}" to (book to spread) } }.toMap()
     }
     val orbReferences = remember(books) {
         books.flatMap { book ->
             book.spreads.mapNotNull { spread ->
                 spread.imageFile?.takeIf(File::exists)?.let {
-                    OrbPageMatcher.Reference(book.id, spread.ordinal, it)
+                    OrbPageMatcher.Reference(book.id, spread.ordinal, spread.spreadId, it)
                 }
             }
         }
@@ -640,7 +664,7 @@ fun ChildReadingScreen(books: List<StoryBook>, onExit: () -> Unit) {
                 }
                 currentDecision?.confirmed?.let {
                     spreadsByKey[it.reference.key]?.let { (book, spread) ->
-                        val isCurrentSpread = currentBook?.id == book.id && currentSpread?.ordinal == spread.ordinal
+                        val isCurrentSpread = currentBook?.id == book.id && currentSpread?.spreadId == spread.spreadId
                         when {
                             isCurrentSpread && pausedForPageChange && player.resume() -> {
                                 pausedForPageChange = false
@@ -818,12 +842,13 @@ fun ChildReadingScreen(books: List<StoryBook>, onExit: () -> Unit) {
 @Composable
 fun RecaptureScreen(
     book: StoryBook,
-    ordinal: Int,
+    spreadId: String,
     repository: StoryRepository,
     onCancel: () -> Unit,
     onFinished: (StoryBook) -> Unit,
 ) {
-    BackHandler(onBack = onCancel)
+    val marker = book.markers.firstOrNull { it.spreadId == spreadId }
+    val ordinal = book.markers.indexOfFirst { it.spreadId == spreadId } + 1
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val mainExecutor = remember { ContextCompat.getMainExecutor(context) }
@@ -834,28 +859,29 @@ fun RecaptureScreen(
             setEnabledUseCases(CameraController.IMAGE_CAPTURE or CameraController.IMAGE_ANALYSIS)
         }
     }
-    val pendingFile = remember(book.id, ordinal) {
-        File(File(book.directory, "spreads"), "%03d.pending.jpg".format(ordinal))
-    }
+    var pendingFile by remember { mutableStateOf<File?>(null) }
+    var activeToken by remember { mutableStateOf<String?>(UUID.randomUUID().toString()) }
     var latestFingerprint by remember { mutableStateOf<ByteArray?>(null) }
+    var capturedFingerprint by remember { mutableStateOf<ByteArray?>(null) }
     var isCapturing by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf("把完整书面放进白框后拍照") }
+    BackHandler(enabled = !isCapturing, onBack = onCancel)
     val fingerprintAnalyzer = remember {
         CameraFrameAnalyzer(PageTurnDetector()) { _, luma, _ ->
             val fingerprint = VisualFingerprint.fromLuma(luma)
-            mainExecutor.execute { latestFingerprint = fingerprint }
+            mainExecutor.execute { if (activeToken != null) latestFingerprint = fingerprint }
         }
     }
 
     DisposableEffect(controller, lifecycleOwner, fingerprintAnalyzer) {
-        pendingFile.delete()
         controller.bindToLifecycle(lifecycleOwner)
         controller.setImageAnalysisAnalyzer(analysisExecutor, fingerprintAnalyzer)
         onDispose {
+            activeToken = null
             controller.clearImageAnalysisAnalyzer()
             controller.unbind()
             analysisExecutor.shutdown()
-            pendingFile.delete()
+            pendingFile?.delete()
         }
     }
 
@@ -887,32 +913,43 @@ fun RecaptureScreen(
                     Button(
                         enabled = !isCapturing,
                         onClick = {
+                            if (marker == null) return@Button
                             isCapturing = true
                             message = "正在保存新照片……"
-                            pendingFile.delete()
+                            val token = UUID.randomUUID().toString()
+                            activeToken = token
+                            capturedFingerprint = latestFingerprint?.copyOf()
+                            val captureFile = File(File(book.directory, "spreads"), ".$spreadId-$token.pending.jpg")
+                            pendingFile?.delete()
+                            pendingFile = captureFile
                             controller.takePicture(
-                                ImageCapture.OutputFileOptions.Builder(pendingFile).build(),
+                                ImageCapture.OutputFileOptions.Builder(captureFile).build(),
                                 mainExecutor,
                                 object : ImageCapture.OnImageSavedCallback {
                                     override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
+                                        if (activeToken != token) { captureFile.delete(); return }
+                                        var installed: File? = null
                                         runCatching {
-                                            val target = repository.replaceReferenceImage(book, ordinal, pendingFile)
+                                            val target = repository.replaceReferenceImage(book, spreadId, captureFile)
+                                            installed = target
                                             val updated = StoryBookEditor.replaceReference(
                                                 book,
-                                                ordinal,
+                                                spreadId,
                                                 target,
-                                                latestFingerprint,
+                                                capturedFingerprint,
                                             )
                                             repository.save(updated)
                                             updated
                                         }.onSuccess(onFinished).onFailure {
+                                            installed?.delete()
                                             isCapturing = false
                                             message = "替换失败，原照片已保留，请重试"
                                         }
                                     }
 
                                     override fun onError(exception: ImageCaptureException) {
-                                        pendingFile.delete()
+                                        captureFile.delete()
+                                        if (activeToken != token) return
                                         isCapturing = false
                                         message = "拍照失败，原照片已保留，请重试"
                                     }
@@ -930,18 +967,148 @@ fun RecaptureScreen(
 }
 
 @Composable
+fun InsertSpreadScreen(
+    book: StoryBook,
+    anchorSpreadId: String,
+    repository: StoryRepository,
+    onCancel: () -> Unit,
+    onFinished: (StoryBook, StoryBook, File) -> Unit,
+) {
+    val anchor = book.markers.firstOrNull { it.spreadId == anchorSpreadId }
+    if (anchor == null || anchor.recordingEndMs - anchor.recordingStartMs < 1_000L) {
+        LaunchedEffect(Unit) { onCancel() }
+        return
+    }
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val mainExecutor = remember { ContextCompat.getMainExecutor(context) }
+    val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
+    val controller = remember {
+        LifecycleCameraController(context).apply {
+            cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
+            setEnabledUseCases(CameraController.IMAGE_CAPTURE or CameraController.IMAGE_ANALYSIS)
+        }
+    }
+    var pendingFile by remember { mutableStateOf<File?>(null) }
+    var activeToken by remember { mutableStateOf<String?>(UUID.randomUUID().toString()) }
+    val player = remember { AudioSegmentPlayer() }
+    var latestFingerprint by remember { mutableStateOf<ByteArray?>(null) }
+    var capturedFingerprint by remember { mutableStateOf<ByteArray?>(null) }
+    var photoReady by remember { mutableStateOf(false) }
+    var busy by remember { mutableStateOf(false) }
+    var message by remember { mutableStateOf("把完整书面放进白框后拍照") }
+    var split by remember { mutableFloatStateOf(((anchor.recordingStartMs + anchor.recordingEndMs) / 2L).toFloat()) }
+    var waveform by remember { mutableStateOf<FloatArray?>(null) }
+    val analyzer = remember {
+        CameraFrameAnalyzer(PageTurnDetector()) { _, luma, _ ->
+            val value = VisualFingerprint.fromLuma(luma)
+            mainExecutor.execute { if (activeToken != null) latestFingerprint = value }
+        }
+    }
+    fun cancel() {
+        player.stop()
+        pendingFile?.delete()
+        onCancel()
+    }
+    BackHandler(enabled = !busy, onBack = ::cancel)
+    DisposableEffect(controller, lifecycleOwner, analyzer) {
+        controller.bindToLifecycle(lifecycleOwner)
+        controller.setImageAnalysisAnalyzer(analysisExecutor, analyzer)
+        onDispose {
+            activeToken = null
+            player.stop()
+            controller.clearImageAnalysisAnalyzer()
+            controller.unbind()
+            analysisExecutor.shutdown()
+            pendingFile?.delete()
+        }
+    }
+    LaunchedEffect(photoReady) {
+        if (photoReady && waveform == null) waveform = withContext(Dispatchers.IO) {
+            runCatching { AudioWaveformExtractor().extract(book.audioFile, anchor.recordingStartMs, anchor.recordingEndMs) }.getOrNull()
+        }
+    }
+    Surface(Modifier.fillMaxSize(), color = if (photoReady) Paper else Ink) {
+        if (!photoReady) Box(Modifier.fillMaxSize()) {
+            AndroidView(
+                factory = { PreviewView(it).apply { scaleType = PreviewView.ScaleType.FILL_CENTER; this.controller = controller } },
+                modifier = Modifier.fillMaxSize(),
+            )
+            BookGuideFrame(active = latestFingerprint != null, modifier = Modifier.align(Alignment.Center))
+            Surface(Modifier.align(Alignment.BottomCenter).fillMaxWidth(), color = Paper, shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)) {
+                Column(Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("插入下一书面", style = MaterialTheme.typography.headlineLarge)
+                    Text(message, modifier = Modifier.padding(vertical = 10.dp))
+                    Button(enabled = !busy && latestFingerprint != null, onClick = {
+                        busy = true; pendingFile?.delete(); capturedFingerprint = latestFingerprint?.copyOf()
+                        val token = UUID.randomUUID().toString()
+                        activeToken = token
+                        val captureFile = File(File(book.directory, "spreads"), ".insert-$anchorSpreadId-$token.pending.jpg")
+                        pendingFile = captureFile
+                        controller.takePicture(ImageCapture.OutputFileOptions.Builder(captureFile).build(), mainExecutor,
+                            object : ImageCapture.OnImageSavedCallback {
+                                override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) { if (activeToken == token) { busy = false; photoReady = true } else captureFile.delete() }
+                                override fun onError(exception: ImageCaptureException) { captureFile.delete(); if (activeToken == token) { busy = false; message = "拍照失败，请重试" } }
+                            })
+                    }, modifier = Modifier.fillMaxWidth().height(56.dp)) { Text(if (busy) "拍摄中" else "拍下书面") }
+                    TextButton(enabled = !busy, onClick = ::cancel) { Text("取消") }
+                }
+            }
+        } else Column(Modifier.fillMaxSize().padding(24.dp)) {
+            Text("分配原录音", style = MaterialTheme.typography.headlineLarge)
+            Text("选择新书面开始的位置：${formatBoundary(split.toLong())}", modifier = Modifier.padding(top = 8.dp))
+            Canvas(Modifier.fillMaxWidth().padding(top = 18.dp).height(84.dp).background(Color.White, RoundedCornerShape(12.dp))) {
+                val samples = waveform ?: return@Canvas
+                val step = size.width / samples.size.coerceAtLeast(1)
+                samples.forEachIndexed { index, value ->
+                    val half = value * size.height * .45f
+                    drawLine(Moss, Offset(index * step, size.height / 2 - half), Offset(index * step, size.height / 2 + half), 2f)
+                }
+            }
+            Slider(value = split, onValueChange = { split = it }, valueRange =
+                (anchor.recordingStartMs + 500L).toFloat()..(anchor.recordingEndMs - 500L).toFloat())
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedButton(onClick = { player.play(book.audioFile, (split.toLong() - 2_000L).coerceAtLeast(anchor.recordingStartMs), split.toLong()) }, modifier = Modifier.weight(1f)) { Text("试听左侧结尾") }
+                OutlinedButton(onClick = { player.play(book.audioFile, split.toLong(), (split.toLong() + 2_000L).coerceAtMost(anchor.recordingEndMs)) }, modifier = Modifier.weight(1f)) { Text("试听右侧开头") }
+            }
+            Spacer(Modifier.weight(1f))
+            Button(enabled = !busy, onClick = {
+                busy = true
+                var installed: File? = null
+                runCatching {
+                    val newId = UUID.randomUUID().toString()
+                    installed = repository.installInsertImage(book, newId, requireNotNull(pendingFile))
+                    val updated = StoryBookEditor.insertAfter(book, anchorSpreadId, split.toLong(), SpreadMarker(
+                        timestampMs = split.toLong(), imageFile = installed, source = MarkerSource.MANUAL,
+                        fingerprint = capturedFingerprint?.copyOf(), fingerprintVersion = 2, spreadId = newId,
+                    ))
+                    check(updated !== book)
+                    repository.save(updated)
+                    updated
+                }.onSuccess { onFinished(it, book, installed!!) }.onFailure {
+                    installed?.delete(); busy = false; message = "插入失败，绘本没有改变"
+                }
+            }, modifier = Modifier.fillMaxWidth().height(56.dp)) { Text(if (busy) "保存中" else "确认插入") }
+            TextButton(enabled = !busy, onClick = ::cancel, modifier = Modifier.fillMaxWidth()) { Text("取消") }
+            if (message.startsWith("插入失败")) Text(message, color = Coral)
+        }
+    }
+}
+
+@Composable
 fun RerecordScreen(
     book: StoryBook,
-    ordinal: Int,
+    spreadId: String,
     repository: StoryRepository,
     onCancel: () -> Unit,
     onFinished: (StoryBook) -> Unit,
 ) {
     val context = LocalContext.current
     val recorder = remember { StoryAudioRecorder(context) }
-    val spread = book.spreads.getOrNull(ordinal - 1)
-    val targetFile = remember(book.id, ordinal) { repository.overrideAudioFile(book, ordinal) }
-    val pendingFile = remember(targetFile) { File(targetFile.parentFile, "${targetFile.name}.pending") }
+    val spread = book.spreads.firstOrNull { it.spreadId == spreadId }
+    val ordinal = spread?.ordinal ?: 0
+    val targetFile = remember(book.id, spreadId) { repository.overrideAudioFile(book, spreadId) }
+    val pendingFile = remember(targetFile) { File(targetFile.parentFile, "${targetFile.name}.${UUID.randomUUID()}.pending") }
     var isRecording by remember { mutableStateOf(false) }
     var elapsedMs by remember { mutableLongStateOf(0L) }
     var amplitude by remember { mutableFloatStateOf(0f) }
@@ -1013,7 +1180,7 @@ fun RerecordScreen(
                         targetFile.parentFile?.mkdirs()
                         pendingFile.copyTo(targetFile, overwrite = true)
                         pendingFile.delete()
-                        val updated = StoryBookEditor.replaceNarration(book, ordinal, targetFile, duration)
+                        val updated = StoryBookEditor.replaceNarration(book, spreadId, targetFile, duration)
                         repository.save(updated)
                         onFinished(updated)
                     }
@@ -1037,13 +1204,18 @@ fun RerecordScreen(
 fun ReviewScreen(
     book: StoryBook,
     repository: StoryRepository,
-    onRerecord: (StoryBook, Int) -> Unit,
-    onRecapture: (StoryBook, Int) -> Unit,
+    onRerecord: (StoryBook, String) -> Unit,
+    onRecapture: (StoryBook, String) -> Unit,
+    onInsert: (StoryBook, String, StoryBook?, File?) -> Unit,
+    initialUndo: StoryBook? = null,
+    initialUndoImage: File? = null,
     onBack: () -> Unit,
 ) {
     val player = remember { AudioSegmentPlayer() }
+    val editSession = remember(book.id, book.markers.map { it.spreadId }) { StoryEditSession(book, initialUndo) }
     var editableBook by remember(book.id) { mutableStateOf(book) }
-    var playingOrdinal by remember { mutableStateOf<Int?>(null) }
+    var undoImage by remember(book.id) { mutableStateOf(initialUndoImage) }
+    var playingSpreadId by remember { mutableStateOf<String?>(null) }
     var previewPositionMs by remember { mutableStateOf<Long?>(null) }
     val waveformCache = remember(book.id) { mutableStateMapOf<WaveformCacheKey, FloatArray>() }
     DisposableEffect(Unit) { onDispose { player.stop() } }
@@ -1061,28 +1233,25 @@ fun ReviewScreen(
         }
     }
 
-    fun setBoundary(markerIndex: Int, timestampMs: Long) {
+    fun setBoundary(leftId: String, rightId: String, timestampMs: Long) {
         player.stop()
-        playingOrdinal = null
+        playingSpreadId = null
         previewPositionMs = null
-        editableBook = StoryBookEditor.moveBoundary(editableBook, markerIndex, timestampMs)
-        repository.save(editableBook)
+        editableBook = editSession.apply(StoryBookEditor.moveBoundary(editableBook, leftId, rightId, timestampMs), repository::save)
     }
 
-    fun trimNarration(ordinal: Int, startMs: Long, endMs: Long) {
+    fun trimNarration(spreadId: String, startMs: Long, endMs: Long) {
         player.stop()
-        playingOrdinal = null
+        playingSpreadId = null
         previewPositionMs = null
-        editableBook = StoryBookEditor.trimNarration(editableBook, ordinal, startMs, endMs)
-        repository.save(editableBook)
+        editableBook = editSession.apply(StoryBookEditor.trimNarration(editableBook, spreadId, startMs, endMs), repository::save)
     }
 
-    fun mergeWithNext(ordinal: Int) {
+    fun mergeWithNext(spreadId: String) {
         player.stop()
-        playingOrdinal = null
+        playingSpreadId = null
         previewPositionMs = null
-        editableBook = StoryBookEditor.mergeWithNext(editableBook, ordinal)
-        repository.save(editableBook)
+        editableBook = editSession.apply(StoryBookEditor.mergeWithNext(editableBook, spreadId), repository::save)
     }
 
     Surface(Modifier.fillMaxSize(), color = Paper) {
@@ -1104,66 +1273,75 @@ fun ReviewScreen(
                     color = Ink.copy(alpha = 0.68f),
                     modifier = Modifier.padding(top = 8.dp, bottom = 8.dp),
                 )
+                Button(enabled = editSession.canUndo, onClick = {
+                    player.stop()
+                    playingSpreadId = null
+                    editableBook = editSession.undo(repository::save)
+                    undoImage?.takeIf { image -> editableBook.markers.none { it.imageFile == image } }?.delete()
+                    undoImage = null
+                }) { Text("撤销上一步") }
             }
-            items(editableBook.spreads, key = { it.ordinal }) { spread ->
-                val marker = editableBook.markers[spread.ordinal - 1]
-                val sourceStartMs = if (marker.overrideAudioFile != null) 0L else marker.timestampMs
+            items(editableBook.spreads, key = { it.spreadId }) { spread ->
+                val markerIndex = editableBook.markers.indexOfFirst { it.spreadId == spread.spreadId }
+                val marker = editableBook.markers[markerIndex]
+                val sourceStartMs = if (marker.overrideAudioFile != null) 0L else marker.recordingStartMs
                 val sourceEndMs = marker.overrideDurationMs
                     ?.takeIf { marker.overrideAudioFile != null }
-                    ?: (editableBook.markers.getOrNull(spread.ordinal)?.timestampMs ?: editableBook.durationMs)
+                    ?: marker.recordingEndMs
                 val waveformKey = waveformCacheKey(editableBook, spread)
-                val hasSharedBoundary = spread.ordinal < editableBook.spreads.size &&
-                    marker.overrideAudioFile == null &&
-                    editableBook.markers[spread.ordinal].overrideAudioFile == null
+                val nextMarker = editableBook.markers.getOrNull(markerIndex + 1)
+                val hasSharedBoundary = nextMarker != null && StoryBookEditor.shareBoundary(marker, nextMarker)
                 SpreadReviewCard(
                     spread = spread,
-                    playing = playingOrdinal == spread.ordinal,
-                    previewPositionMs = previewPositionMs?.takeIf { playingOrdinal == spread.ordinal },
+                    playing = playingSpreadId == spread.spreadId,
+                    previewPositionMs = previewPositionMs?.takeIf { playingSpreadId == spread.spreadId },
                     waveform = waveformCache[waveformKey],
                     trimRange = sourceStartMs.toFloat()..sourceEndMs.toFloat(),
-                    boundaryValueMs = editableBook.markers.getOrNull(spread.ordinal)
-                        ?.timestampMs
+                    boundaryValueMs = nextMarker
+                        ?.recordingStartMs
                         ?.takeIf { hasSharedBoundary },
                     boundaryRange = if (hasSharedBoundary) {
-                        val minimum = editableBook.markers[spread.ordinal - 1].timestampMs + 500L
-                        val maximum = editableBook.markers
-                            .getOrNull(spread.ordinal + 1)
-                            ?.timestampMs
-                            ?.minus(500L)
-                            ?: (editableBook.durationMs - 500L)
+                        val minimum = marker.recordingStartMs + 500L
+                        val maximum = requireNotNull(nextMarker).recordingEndMs - 500L
                         minimum.toFloat()..maximum.toFloat()
                     } else {
                         null
                     },
                     onTrimChanged = { startMs, endMs ->
-                        trimNarration(spread.ordinal, startMs, endMs)
+                        trimNarration(spread.spreadId, startMs, endMs)
                     },
-                    onBoundaryChanged = { setBoundary(spread.ordinal, it) },
-                    onMergeNext = if (spread.ordinal < editableBook.spreads.size) {
-                        { mergeWithNext(spread.ordinal) }
+                    onBoundaryChanged = { nextMarker?.let { next -> setBoundary(spread.spreadId, next.spreadId, it) } },
+                    onMergeNext = if (hasSharedBoundary) {
+                        { mergeWithNext(spread.spreadId) }
                     } else null,
-                    onRerecord = { onRerecord(editableBook, spread.ordinal) },
-                    onRecapture = { onRecapture(editableBook, spread.ordinal) },
+                    onRerecord = { onRerecord(editableBook, spread.spreadId) },
+                    onRecapture = { onRecapture(editableBook, spread.spreadId) },
+                    onMoveUp = if (spread.ordinal > 1) {{ editableBook = editSession.apply(StoryBookEditor.reorder(editableBook, spread.spreadId, spread.ordinal - 2), repository::save) }} else null,
+                    onMoveDown = if (spread.ordinal < editableBook.spreads.size) {{ editableBook = editSession.apply(StoryBookEditor.reorder(editableBook, spread.spreadId, spread.ordinal), repository::save) }} else null,
+                    onDelete = if (editableBook.markers.size > 1) {{ editableBook = editSession.apply(StoryBookEditor.delete(editableBook, spread.spreadId), repository::save) }} else null,
+                    onInsert = if (marker.recordingEndMs - marker.recordingStartMs >= 1_000L) {
+                        { onInsert(editableBook, spread.spreadId, editSession.undoSnapshot, undoImage) }
+                    } else null,
                     onPlay = {
-                        if (playingOrdinal == spread.ordinal) {
+                        if (playingSpreadId == spread.spreadId) {
                             player.stop()
-                            playingOrdinal = null
+                            playingSpreadId = null
                             previewPositionMs = null
                         } else {
-                            playingOrdinal = spread.ordinal
+                            playingSpreadId = spread.spreadId
                             previewPositionMs = null
                             player.play(spread.audioFile, spread.startMs, spread.endMs) {
-                                playingOrdinal = null
+                                playingSpreadId = null
                                 previewPositionMs = null
                             }
                         }
                     },
                     onPreview = { startMs, endMs ->
                         player.stop()
-                        playingOrdinal = spread.ordinal
+                        playingSpreadId = spread.spreadId
                         previewPositionMs = startMs
                         player.play(spread.audioFile, startMs, endMs) {
-                            playingOrdinal = null
+                            playingSpreadId = null
                             previewPositionMs = null
                         }
                     },
@@ -1201,9 +1379,14 @@ private fun SpreadReviewCard(
     onMergeNext: (() -> Unit)?,
     onRerecord: () -> Unit,
     onRecapture: () -> Unit,
+    onMoveUp: (() -> Unit)?,
+    onMoveDown: (() -> Unit)?,
+    onDelete: (() -> Unit)?,
+    onInsert: (() -> Unit)?,
     onPlay: () -> Unit,
     onPreview: (Long, Long) -> Unit,
 ) {
+    var confirmDelete by remember { mutableStateOf(false) }
     var trimValue by remember(spread.startMs, spread.endMs) {
         mutableStateOf(spread.startMs.toFloat()..spread.endMs.toFloat())
     }
@@ -1358,6 +1541,15 @@ private fun SpreadReviewCard(
             }
         }
         Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 14.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            onMoveUp?.let { TextButton(onClick = it) { Text("上移") } }
+            onMoveDown?.let { TextButton(onClick = it) { Text("下移") } }
+            onDelete?.let { TextButton(onClick = { confirmDelete = true }) { Text("删除") } }
+            onInsert?.let { TextButton(onClick = it) { Text("插入下一书面", maxLines = 1) } }
+        }
+        Row(
             Modifier.fillMaxWidth().padding(start = 14.dp, end = 14.dp, bottom = 14.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
@@ -1375,6 +1567,13 @@ private fun SpreadReviewCard(
             }
         }
     }
+    if (confirmDelete) AlertDialog(
+        onDismissRequest = { confirmDelete = false },
+        title = { Text("删除这个书面？") },
+        text = { Text("删除后需使用“撤销上一步”才能恢复。") },
+        confirmButton = { TextButton(onClick = { confirmDelete = false; onDelete?.invoke() }) { Text("确认删除") } },
+        dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("取消") } },
+    )
 }
 
 private data class WaveformCacheKey(
@@ -1386,11 +1585,11 @@ private data class WaveformCacheKey(
 )
 
 private fun waveformCacheKey(book: StoryBook, spread: StorySpread): WaveformCacheKey {
-    val marker = book.markers[spread.ordinal - 1]
-    val sourceStartMs = if (marker.overrideAudioFile != null) 0L else marker.timestampMs
+    val marker = book.markers.first { it.spreadId == spread.spreadId }
+    val sourceStartMs = if (marker.overrideAudioFile != null) 0L else marker.recordingStartMs
     val sourceEndMs = marker.overrideDurationMs
         ?.takeIf { marker.overrideAudioFile != null }
-        ?: (book.markers.getOrNull(spread.ordinal)?.timestampMs ?: book.durationMs)
+        ?: marker.recordingEndMs
     return WaveformCacheKey(
         path = spread.audioFile.absolutePath,
         modifiedMs = spread.audioFile.lastModified(),
@@ -1398,6 +1597,15 @@ private fun waveformCacheKey(book: StoryBook, spread: StorySpread): WaveformCach
         startMs = sourceStartMs,
         endMs = sourceEndMs,
     )
+}
+
+private fun allocateRecordingRanges(markers: List<SpreadMarker>, durationMs: Long): List<SpreadMarker> {
+    require(markers.isNotEmpty() && durationMs > markers.last().timestampMs)
+    return markers.mapIndexed { index, marker ->
+        val end = markers.getOrNull(index + 1)?.timestampMs ?: durationMs
+        require(end > marker.timestampMs)
+        marker.copy(recordingStartMs = marker.timestampMs, recordingEndMs = end)
+    }
 }
 
 @Composable
@@ -1439,8 +1647,8 @@ private fun formatDuration(milliseconds: Long): String {
 private fun formatBoundary(milliseconds: Long): String {
     val safe = milliseconds.coerceAtLeast(0)
     val totalSeconds = safe / 1000
-    val tenths = (safe % 1000) / 100
-    return "%02d:%02d.%d".format(totalSeconds / 60, totalSeconds % 60, tenths)
+    val millis = safe % 1000
+    return "%02d:%02d.%03d".format(totalSeconds / 60, totalSeconds % 60, millis)
 }
 
 private fun recognitionDiagnostic(decision: OrbPageMatcher.Decision): String {

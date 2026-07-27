@@ -26,9 +26,10 @@ class OrbPageMatcher(
     data class Reference(
         val bookId: String,
         val spreadOrdinal: Int,
+        val spreadId: String,
         val imageFile: File,
     ) {
-        val key: String get() = "$bookId:$spreadOrdinal"
+        val key: String get() = "$bookId:$spreadId"
     }
 
     data class Score(

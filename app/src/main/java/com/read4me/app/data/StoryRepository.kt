@@ -38,14 +38,17 @@ class StoryRepository(context: Context) {
         )
     }
 
-    fun imageFile(draft: Draft, ordinal: Int): File =
-        File(File(draft.directory, "spreads"), "%03d.jpg".format(ordinal))
+    fun imageFile(draft: Draft, spreadId: String): File =
+        File(File(draft.directory, "spreads"), "$spreadId.jpg")
 
     fun save(book: StoryBook) {
         val markers = JSONArray().apply {
             book.markers.forEach { marker ->
                 put(JSONObject().apply {
+                    put("id", marker.spreadId)
                     put("timestampMs", marker.timestampMs)
+                    put("recordingStartMs", marker.recordingStartMs)
+                    put("recordingEndMs", marker.recordingEndMs)
                     put("image", marker.imageFile?.name ?: JSONObject.NULL)
                     put("source", marker.source.name)
                     put(
@@ -65,14 +68,21 @@ class StoryRepository(context: Context) {
             }
         }
         val manifest = JSONObject().apply {
-            put("version", 4)
+            put("version", 5)
             put("id", book.id)
             put("title", book.title)
             put("audio", book.audioFile.name)
             put("durationMs", book.durationMs)
             put("markers", markers)
         }
-        File(book.directory, "manifest.json").writeText(manifest.toString(2))
+        val target = File(book.directory, "manifest.json")
+        val pending = File(book.directory, "manifest.json.pending")
+        pending.writeText(manifest.toString(2))
+        try {
+            Files.move(pending.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+        } catch (_: Exception) {
+            Files.move(pending.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
+        }
     }
 
     fun loadAll(): List<StoryBook> = booksDirectory.listFiles()
@@ -121,35 +131,56 @@ class StoryRepository(context: Context) {
         draft.directory.deleteRecursively()
     }
 
-    /** Installs a successfully captured pending image without exposing a partial reference file. */
-    fun replaceReferenceImage(book: StoryBook, ordinal: Int, pendingFile: File): File {
-        require(ordinal in 1..book.markers.size && pendingFile.isFile)
+    /** Installs a replacement at a new immutable path so a failed manifest save leaves the old image intact. */
+    fun replaceReferenceImage(book: StoryBook, spreadId: String, pendingFile: File): File {
+        val marker = book.markers.firstOrNull { it.spreadId == spreadId }
+        require(marker != null && pendingFile.isFile)
         val spreads = File(book.directory, "spreads").apply { mkdirs() }
-        val target = book.markers[ordinal - 1].imageFile ?: File(spreads, "%03d.jpg".format(ordinal))
+        val target = File(spreads, "$spreadId-${UUID.randomUUID()}.jpg")
         try {
             Files.move(
                 pendingFile.toPath(),
                 target.toPath(),
                 StandardCopyOption.ATOMIC_MOVE,
-                StandardCopyOption.REPLACE_EXISTING,
             )
         } catch (_: Exception) {
-            Files.move(pendingFile.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
+            Files.move(pendingFile.toPath(), target.toPath())
+        }
+        return target
+    }
+
+    /** Installs a new spread image. Existing stable files are never overwritten. */
+    fun installInsertImage(book: StoryBook, spreadId: String, pendingFile: File): File {
+        require(pendingFile.isFile)
+        val target = File(File(book.directory, "spreads").apply { mkdirs() }, "$spreadId.jpg")
+        require(!target.exists())
+        try {
+            Files.move(pendingFile.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE)
+        } catch (_: Exception) {
+            Files.move(pendingFile.toPath(), target.toPath())
         }
         return target
     }
 
     private fun load(directory: File): StoryBook? = runCatching {
         val json = JSONObject(File(directory, "manifest.json").readText())
+        val version = json.optInt("version", 1)
+        require(version in 1..5) { "Unsupported manifest version $version" }
         val markerJson = json.getJSONArray("markers")
         val spreadsDirectory = File(directory, "spreads")
         val markers = buildList {
             for (index in 0 until markerJson.length()) {
                 val item = markerJson.getJSONObject(index)
                 val image = item.optString("image").takeIf { it.isNotBlank() && it != "null" }
+                val timestamp = item.getLong("timestampMs")
+                val nextTimestamp = markerJson.optJSONObject(index + 1)?.optLong("timestampMs")
+                    ?: json.getLong("durationMs")
+                val deterministicId = UUID.nameUUIDFromBytes(
+                    "${json.getString("id")}:$index:$timestamp".toByteArray(Charsets.UTF_8),
+                ).toString()
                 add(
                     SpreadMarker(
-                        timestampMs = item.getLong("timestampMs"),
+                        timestampMs = timestamp,
                         imageFile = image?.let { File(spreadsDirectory, it) }?.takeIf(File::exists),
                         source = MarkerSource.valueOf(item.getString("source")),
                         fingerprint = item.optString("fingerprint")
@@ -158,8 +189,7 @@ class StoryRepository(context: Context) {
                         fingerprintVersion = item.optInt("fingerprintVersion", 1),
                         overrideAudioFile = item.optString("overrideAudio")
                             .takeIf { it.isNotBlank() && it != "null" }
-                            ?.let { File(directory, it) }
-                            ?.takeIf(File::exists),
+                            ?.let { File(directory, it) },
                         overrideDurationMs = if (item.isNull("overrideDurationMs")) {
                             null
                         } else {
@@ -167,6 +197,9 @@ class StoryRepository(context: Context) {
                         },
                         trimStartMs = if (item.isNull("trimStartMs")) null else item.getLong("trimStartMs"),
                         trimEndMs = if (item.isNull("trimEndMs")) null else item.getLong("trimEndMs"),
+                        spreadId = if (version >= 5) item.getString("id") else deterministicId,
+                        recordingStartMs = if (version >= 5) item.getLong("recordingStartMs") else timestamp,
+                        recordingEndMs = if (version >= 5) item.getLong("recordingEndMs") else nextTimestamp,
                     ),
                 )
             }
@@ -181,6 +214,7 @@ class StoryRepository(context: Context) {
         )
     }.getOrNull()
 
-    fun overrideAudioFile(book: StoryBook, ordinal: Int): File =
-        File(File(book.directory, "overrides").apply { mkdirs() }, "spread-%03d.m4a".format(ordinal))
+    fun overrideAudioFile(book: StoryBook, spreadId: String): File =
+        File(File(book.directory, "overrides").apply { mkdirs() }, "$spreadId.m4a")
+
 }
