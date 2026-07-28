@@ -2,11 +2,14 @@ package com.read4me.app.data
 
 import android.content.Context
 import android.util.Base64
+import com.read4me.app.audio.audioDurationMs
 import com.read4me.app.model.MarkerSource
+import com.read4me.app.model.NarrationSegment
 import com.read4me.app.model.PhotoQuality
 import com.read4me.app.model.SpreadMarker
 import com.read4me.app.model.SpreadReference
 import com.read4me.app.model.StoryBook
+import com.read4me.app.model.StoryStatus
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -20,40 +23,42 @@ class StoryRepository(context: Context) {
     private val booksDirectory = File(context.filesDir, "books").apply { mkdirs() }
     private val trashDirectory = File(context.filesDir, "trash").apply { mkdirs() }
 
+    init {
+        recoverPendingManifests()
+    }
+
     data class TrashedBook(val book: StoryBook, val deletedAtMs: Long)
 
-    data class Draft(
-        val id: String,
-        val title: String,
-        val directory: File,
-        val audioFile: File,
-    )
-
-    fun createDraft(title: String): Draft {
+    fun createDraft(title: String): StoryBook {
         val id = UUID.randomUUID().toString()
         val directory = File(booksDirectory, id).apply {
             mkdirs()
             File(this, "spreads").mkdirs()
+            File(this, "recordings").mkdirs()
         }
-        return Draft(
-            id = id,
-            title = title.ifBlank { "我们的故事" },
-            directory = directory,
-            audioFile = File(directory, "recording.m4a"),
-        )
+        return StoryBook(id, title.ifBlank { "我们的故事" }, directory, File(directory, "legacy.m4a"), 0L,
+            emptyList(), StoryStatus.IN_PROGRESS).also(::save)
     }
 
-    fun imageFile(draft: Draft, spreadId: String): File =
-        File(File(draft.directory, "spreads"), "$spreadId.jpg")
+    fun imageFile(book: StoryBook, spreadId: String): File =
+        File(File(book.directory, "spreads"), "$spreadId.jpg")
 
     fun save(book: StoryBook) {
+        validateFiles(book, verifyMediaDuration = false)
         val markers = JSONArray().apply {
             book.markers.forEach { marker ->
                 put(JSONObject().apply {
                     put("id", marker.spreadId)
                     put("timestampMs", marker.timestampMs)
-                    put("recordingStartMs", marker.recordingStartMs)
-                    put("recordingEndMs", marker.recordingEndMs)
+                    put("segments", JSONArray().apply {
+                        marker.segments.forEach { segment ->
+                            put(JSONObject().apply {
+                                put("file", segment.file.relativeTo(book.directory).invariantSeparatorsPath)
+                                put("startMs", segment.startMs)
+                                put("endMs", segment.endMs)
+                            })
+                        }
+                    })
                     put("image", marker.references.firstOrNull()?.file?.name ?: JSONObject.NULL)
                     put("source", marker.source.name)
                     put(
@@ -65,23 +70,17 @@ class StoryRepository(context: Context) {
                     put("references", JSONArray().apply {
                         marker.references.forEach { reference -> put(referenceJson(book, reference)) }
                     })
-                    put(
-                        "overrideAudio",
-                        marker.overrideAudioFile?.relativeTo(book.directory)?.invariantSeparatorsPath
-                            ?: JSONObject.NULL,
-                    )
-                    put("overrideDurationMs", marker.overrideDurationMs ?: JSONObject.NULL)
                     put("trimStartMs", marker.trimStartMs ?: JSONObject.NULL)
                     put("trimEndMs", marker.trimEndMs ?: JSONObject.NULL)
                 })
             }
         }
         val manifest = JSONObject().apply {
-            put("version", 6)
+            put("version", 7)
             put("id", book.id)
             put("title", book.title)
-            put("audio", book.audioFile.name)
-            put("durationMs", book.durationMs)
+            put("status", book.status.name)
+            put("resumeSpreadId", book.resumeSpreadId ?: JSONObject.NULL)
             put("markers", markers)
         }
         val target = File(book.directory, "manifest.json")
@@ -167,12 +166,16 @@ class StoryRepository(context: Context) {
         }
     }
 
-    fun export(book: StoryBook, output: OutputStream) = BookArchive.export(book.directory, output)
+    fun export(book: StoryBook, output: OutputStream) {
+        validateFiles(book)
+        BookArchive.export(book.directory, output)
+    }
 
-    fun exportLibrary(output: OutputStream) = LibraryArchive.export(
-        loadAll().map(StoryBook::directory),
-        output,
-    )
+    fun exportLibrary(output: OutputStream) {
+        val books = loadAll()
+        books.forEach(::validateFiles)
+        LibraryArchive.export(books.map(StoryBook::directory), output)
+    }
 
     fun importLibrary(input: InputStream): List<StoryBook> {
         val staging = File(booksDirectory.parentFile, ".library-import-${UUID.randomUUID()}")
@@ -224,27 +227,96 @@ class StoryRepository(context: Context) {
         }
     }
 
-    private fun validateFiles(book: StoryBook) {
+    private fun validateFiles(book: StoryBook, verifyMediaDuration: Boolean = true) {
         val root = book.directory.canonicalFile
         fun isContained(file: File): Boolean {
             val canonical = file.canonicalFile
             return canonical.path.startsWith(root.path + File.separator)
         }
-        require(isContained(book.audioFile) && book.audioFile.isFile) { "Recording is missing or unsafe" }
-        require(book.markers.isNotEmpty()) { "Book has no spreads" }
-        require(book.markers.all { it.references.isNotEmpty() }) { "A spread has no reference images" }
+        if (book.status == StoryStatus.COMPLETE) {
+            require(book.markers.isNotEmpty()) { "Complete book has no playable spreads" }
+            require(book.markers.all { it.references.isNotEmpty() && it.segments.isNotEmpty() }) { "A complete spread is incomplete" }
+        } else {
+            require(book.markers.all { it.references.isNotEmpty() && it.segments.isNotEmpty() }) {
+                "A published draft spread is incomplete"
+            }
+        }
+        require(book.markers.map(SpreadMarker::spreadId).distinct().size == book.markers.size) {
+            "Spread IDs are not unique"
+        }
+        require(
+            if (book.markers.isEmpty()) book.resumeSpreadId == null
+            else book.resumeSpreadId != null && book.markers.any { it.spreadId == book.resumeSpreadId }
+        ) { "Recording cursor does not identify a spread" }
         require(book.markers.all { marker -> marker.references.all { isContained(it.file) && it.file.isFile } }) {
             "A spread image is missing or unsafe"
         }
-        require(book.markers.all {
-            it.overrideAudioFile == null || isContained(it.overrideAudioFile) && it.overrideAudioFile.isFile
+        require(book.markers.flatMap(SpreadMarker::segments).all {
+            isContained(it.file) && it.file.isFile && it.startMs >= 0 && it.endMs > it.startMs
         }) {
-            "An override recording is missing or unsafe"
+            "A narration segment is missing, unsafe, or invalid"
+        }
+        if (verifyMediaDuration) {
+            val mediaDurations = mutableMapOf<File, Long>()
+            require(book.markers.flatMap(SpreadMarker::segments).all { segment ->
+                val duration = mediaDurations.getOrPut(segment.file.canonicalFile) {
+                    audioDurationMs(segment.file) ?: -1L
+                }
+                segment.endMs <= duration
+            }) { "A narration segment exceeds its media duration" }
+        }
+        require(book.markers.all { marker ->
+            val total = marker.segments.sumOf(NarrationSegment::durationMs)
+            val start = marker.trimStartMs ?: 0L
+            val end = marker.trimEndMs ?: total
+            start >= 0L && end > start && end <= total
+        }) { "A spread has an invalid or empty trim range" }
+    }
+
+    /** Completes a save whose manifest was fully written but whose final rename was interrupted. */
+    private fun recoverPendingManifests() {
+        booksDirectory.listFiles().orEmpty().filter(File::isDirectory).forEach { directory ->
+            val pending = File(directory, "manifest.json.pending")
+            if (!pending.isFile) return@forEach
+            val target = File(directory, "manifest.json")
+            val backup = File(directory, "manifest.json.recovery-backup")
+            if (backup.isFile) {
+                val targetIsValid = runCatching {
+                    validateFiles(load(directory) ?: error("Current manifest is invalid"), verifyMediaDuration = false)
+                }.isSuccess
+                if (targetIsValid) backup.delete() else runCatching {
+                    Files.move(backup.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
+                }
+            }
+            val hadTarget = target.isFile
+            var backupCreatedThisAttempt = false
+            runCatching {
+                val candidate = JSONObject(pending.readText())
+                require(candidate.optInt("version") == 7)
+                require(candidate.getString("id") == directory.name)
+                require(candidate.has("markers") && candidate.has("status"))
+                if (target.isFile) {
+                    Files.move(target.toPath(), backup.toPath(), StandardCopyOption.REPLACE_EXISTING)
+                    backupCreatedThisAttempt = true
+                }
+                Files.move(pending.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
+                validateFiles(load(directory) ?: error("Pending manifest is invalid"), verifyMediaDuration = false)
+                backup.delete()
+            }.onFailure {
+                if (backupCreatedThisAttempt && backup.isFile) {
+                    runCatching {
+                        Files.move(backup.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
+                    }
+                } else if (!hadTarget) {
+                    target.delete()
+                }
+            }
         }
     }
 
-    fun deleteDraft(draft: Draft) {
-        draft.directory.deleteRecursively()
+    fun deleteDraft(book: StoryBook) {
+        require(book.status == StoryStatus.IN_PROGRESS)
+        book.directory.deleteRecursively()
     }
 
     /** Installs a replacement at a new immutable path so a failed manifest save leaves the old image intact. */
@@ -281,7 +353,7 @@ class StoryRepository(context: Context) {
     private fun load(directory: File): StoryBook? = runCatching {
         val json = JSONObject(File(directory, "manifest.json").readText())
         val version = json.optInt("version", 1)
-        require(version in 1..6) { "Unsupported manifest version $version" }
+        require(version in 1..7) { "Unsupported manifest version $version" }
         val markerJson = json.getJSONArray("markers")
         val spreadsDirectory = File(directory, "spreads")
         val markers = buildList {
@@ -290,7 +362,7 @@ class StoryRepository(context: Context) {
                 val image = item.optString("image").takeIf { it.isNotBlank() && it != "null" }
                 val timestamp = item.getLong("timestampMs")
                 val nextTimestamp = markerJson.optJSONObject(index + 1)?.optLong("timestampMs")
-                    ?: json.getLong("durationMs")
+                    ?: json.optLong("durationMs", timestamp)
                 val deterministicId = UUID.nameUUIDFromBytes(
                     "${json.getString("id")}:$index:$timestamp".toByteArray(Charsets.UTF_8),
                 ).toString()
@@ -313,24 +385,36 @@ class StoryRepository(context: Context) {
                         referenceId = UUID.nameUUIDFromBytes("$deterministicId:$it".toByteArray()).toString(),
                     ))
                 }.orEmpty()
+                val legacyOverride = item.optString("overrideAudio")
+                    .takeIf { it.isNotBlank() && it != "null" }
+                    ?.let { File(directory, it) }
+                val legacyOverrideDuration = if (item.isNull("overrideDurationMs")) null else item.getLong("overrideDurationMs")
+                val recordingStart = if (version in 5..6) item.getLong("recordingStartMs") else timestamp
+                val recordingEnd = if (version in 5..6) item.getLong("recordingEndMs") else nextTimestamp
+                val segments = if (version >= 7) {
+                    val array = item.getJSONArray("segments")
+                    buildList {
+                        for (segmentIndex in 0 until array.length()) {
+                            val segment = array.getJSONObject(segmentIndex)
+                            add(NarrationSegment(File(directory, segment.getString("file")), segment.getLong("startMs"), segment.getLong("endMs")))
+                        }
+                    }
+                } else if (legacyOverride != null && (legacyOverrideDuration ?: 0) > 0) {
+                    listOf(NarrationSegment(legacyOverride, 0, legacyOverrideDuration!!))
+                } else if (recordingEnd > recordingStart) {
+                    listOf(NarrationSegment(File(directory, json.getString("audio")), recordingStart, recordingEnd))
+                } else emptyList()
                 add(
                     SpreadMarker(
                         timestampMs = timestamp,
                         source = MarkerSource.valueOf(item.getString("source")),
                         references = references,
-                        overrideAudioFile = item.optString("overrideAudio")
-                            .takeIf { it.isNotBlank() && it != "null" }
-                            ?.let { File(directory, it) },
-                        overrideDurationMs = if (item.isNull("overrideDurationMs")) {
-                            null
-                        } else {
-                            item.getLong("overrideDurationMs")
-                        },
-                        trimStartMs = if (item.isNull("trimStartMs")) null else item.getLong("trimStartMs"),
-                        trimEndMs = if (item.isNull("trimEndMs")) null else item.getLong("trimEndMs"),
+                        segments = segments,
+                        trimStartMs = if (item.isNull("trimStartMs")) null else item.getLong("trimStartMs") - if (version < 7 && legacyOverride == null) recordingStart else 0,
+                        trimEndMs = if (item.isNull("trimEndMs")) null else item.getLong("trimEndMs") - if (version < 7 && legacyOverride == null) recordingStart else 0,
                         spreadId = if (version >= 5) item.getString("id") else deterministicId,
-                        recordingStartMs = if (version >= 5) item.getLong("recordingStartMs") else timestamp,
-                        recordingEndMs = if (version >= 5) item.getLong("recordingEndMs") else nextTimestamp,
+                        recordingStartMs = recordingStart,
+                        recordingEndMs = recordingEnd,
                     ),
                 )
             }
@@ -339,9 +423,12 @@ class StoryRepository(context: Context) {
             id = json.getString("id"),
             title = json.getString("title"),
             directory = directory,
-            audioFile = File(directory, json.getString("audio")),
-            durationMs = json.getLong("durationMs"),
+            audioFile = json.optString("audio").takeIf(String::isNotBlank)?.let { File(directory, it) } ?: File(directory, "legacy.m4a"),
+            durationMs = json.optLong("durationMs", markers.sumOf { marker -> marker.segments.sumOf(NarrationSegment::durationMs) }),
             markers = markers,
+            status = if (version >= 7) StoryStatus.valueOf(json.getString("status")) else StoryStatus.COMPLETE,
+            resumeSpreadId = if (version >= 7) json.optString("resumeSpreadId").takeIf { it.isNotBlank() && it != "null" }
+                else markers.lastOrNull()?.spreadId,
         )
     }.getOrNull()
 
@@ -391,7 +478,10 @@ class StoryRepository(context: Context) {
         if (isNull(name) || !has(name)) null else getDouble(name)
 
     fun overrideAudioFile(book: StoryBook, spreadId: String): File =
-        File(File(book.directory, "overrides").apply { mkdirs() }, "$spreadId.m4a")
+        File(File(book.directory, "recordings").apply { mkdirs() }, "${spreadId}-${UUID.randomUUID()}.m4a")
+
+    fun recordingFile(book: StoryBook): File =
+        File(File(book.directory, "recordings").apply { mkdirs() }, "${UUID.randomUUID()}.m4a")
 
     private fun moveDirectory(source: File, target: File) {
         require(source.exists() && !target.exists())

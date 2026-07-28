@@ -5,99 +5,68 @@ import java.io.File
 object StoryBookEditor {
     private const val MIN_MS = 500L
     private fun index(book: StoryBook, id: String) = book.markers.indexOfFirst { it.spreadId == id }
+    private fun source(book: StoryBook, marker: SpreadMarker) = book.spreads.first { it.spreadId == marker.spreadId }.sourceSegments
 
-    fun replaceReference(book: StoryBook, spreadId: String, imageFile: File, fingerprint: ByteArray? = null, fingerprintVersion: Int = 2) =
-        update(book, spreadId) { marker ->
-            val reference = SpreadReference(imageFile, fingerprint?.copyOf(), fingerprintVersion)
-            marker.copy(references = listOf(reference))
-        }
+    fun replaceReference(book: StoryBook, spreadId: String, imageFile: File, fingerprint: ByteArray? = null, fingerprintVersion: Int = 2) = update(book, spreadId) { it.copy(references = listOf(SpreadReference(imageFile, fingerprint?.copyOf(), fingerprintVersion))) }
+    fun addReference(book: StoryBook, spreadId: String, reference: SpreadReference) = update(book, spreadId) { it.copy(references = it.references + reference) }
+    fun deleteReference(book: StoryBook, spreadId: String, referenceId: String) = update(book, spreadId) { marker -> if (marker.references.size <= 1) marker else marker.copy(references = marker.references.filterNot { it.referenceId == referenceId }) }
+    fun setPrimaryReference(book: StoryBook, spreadId: String, referenceId: String) = update(book, spreadId) { marker -> marker.references.firstOrNull { it.referenceId == referenceId }?.let { marker.copy(references = listOf(it) + marker.references.filterNot { r -> r.referenceId == referenceId }) } ?: marker }
+    fun updateReferenceQuality(book: StoryBook, spreadId: String, referenceId: String, quality: PhotoQuality) = update(book, spreadId) { marker -> marker.copy(references = marker.references.map { if (it.referenceId == referenceId) it.copy(quality = quality) else it }) }
 
-    fun addReference(book: StoryBook, spreadId: String, reference: SpreadReference) =
-        update(book, spreadId) { it.copy(references = it.references + reference) }
-
-    fun deleteReference(book: StoryBook, spreadId: String, referenceId: String) = update(book, spreadId) { marker ->
-        if (marker.references.size <= 1 || marker.references.none { it.referenceId == referenceId }) marker
-        else marker.copy(references = marker.references.filterNot { it.referenceId == referenceId })
+    fun trimNarration(book: StoryBook, spreadId: String, startMs: Long, endMs: Long) = update(book, spreadId) { marker ->
+        val total = NarrationTimeline.duration(source(book, marker))
+        if (total < MIN_MS) marker else { val start = startMs.coerceIn(0, total - MIN_MS); marker.copy(trimStartMs = start, trimEndMs = endMs.coerceIn(start + MIN_MS, total)) }
     }
 
-    fun setPrimaryReference(book: StoryBook, spreadId: String, referenceId: String) = update(book, spreadId) { marker ->
-        val selected = marker.references.firstOrNull { it.referenceId == referenceId } ?: return@update marker
-        marker.copy(references = listOf(selected) + marker.references.filterNot { it.referenceId == referenceId })
+    fun shareBoundary(a: SpreadMarker, b: SpreadMarker): Boolean {
+        val left = a.segments.lastOrNull() ?: return false
+        val right = b.segments.firstOrNull() ?: return false
+        return left.file.canonicalFile == right.file.canonicalFile && left.endMs == right.startMs
     }
-
-    fun updateReferenceQuality(book: StoryBook, spreadId: String, referenceId: String, quality: PhotoQuality) =
-        update(book, spreadId) { marker ->
-            marker.copy(references = marker.references.map { if (it.referenceId == referenceId) it.copy(quality = quality) else it })
-        }
 
     fun moveBoundary(book: StoryBook, leftId: String, rightId: String, timestampMs: Long): StoryBook {
-        val left = index(book, leftId); val right = index(book, rightId)
-        if (left < 0 || right != left + 1) return book
-        val a = book.markers[left]; val b = book.markers[right]
-        if (!shareBoundary(a, b)) return book
-        val minimum = a.recordingStartMs + MIN_MS
-        val maximum = b.recordingEndMs - MIN_MS
+        val i = index(book, leftId); if (i < 0 || index(book, rightId) != i + 1) return book
+        val a = book.markers[i]; val b = book.markers[i + 1]; if (!shareBoundary(a, b)) return book
+        val left = a.segments.last(); val right = b.segments.first()
+        val minimum = left.startMs + MIN_MS
+        val maximum = right.endMs - MIN_MS
         if (maximum < minimum) return book
         val split = timestampMs.coerceIn(minimum, maximum)
         val out = book.markers.toMutableList()
-        out[left] = a.copy(recordingEndMs = split, trimEndMs = null)
-        out[right] = b.copy(timestampMs = split, recordingStartMs = split, trimStartMs = null)
+        out[i] = a.copy(segments = a.segments.dropLast(1) + left.copy(endMs = split), trimStartMs = null, trimEndMs = null)
+        out[i + 1] = b.copy(segments = listOf(right.copy(startMs = split)) + b.segments.drop(1), trimStartMs = null, trimEndMs = null)
         return book.copy(markers = out)
     }
 
-    fun trimNarration(book: StoryBook, spreadId: String, startMs: Long, endMs: Long): StoryBook = update(book, spreadId) { marker ->
-        val sourceStart = if (marker.overrideAudioFile != null) 0L else marker.recordingStartMs
-        val sourceEnd = if (marker.overrideAudioFile != null) marker.overrideDurationMs ?: 0L else marker.recordingEndMs
-        if (sourceEnd - sourceStart < MIN_MS) marker else {
-            val start = startMs.coerceIn(sourceStart, sourceEnd - MIN_MS)
-            marker.copy(trimStartMs = start, trimEndMs = endMs.coerceIn(start + MIN_MS, sourceEnd))
-        }
+    fun reorder(book: StoryBook, spreadId: String, newIndex: Int): StoryBook { val old=index(book,spreadId); if(old<0||newIndex !in book.markers.indices||old==newIndex)return book; val out=book.markers.toMutableList(); out.add(newIndex,out.removeAt(old)); return book.copy(markers=out) }
+    fun delete(book: StoryBook, spreadId: String): StoryBook {
+        val index = index(book, spreadId)
+        if (book.markers.size <= 1 || index < 0) return book
+        val remaining = book.markers.filterNot { it.spreadId == spreadId }
+        val cursor = if (book.resumeSpreadId == spreadId) remaining[minOf(index, remaining.lastIndex)].spreadId else book.resumeSpreadId
+        return book.copy(markers = remaining, resumeSpreadId = cursor)
     }
 
-    fun reorder(book: StoryBook, spreadId: String, newIndex: Int): StoryBook {
-        val old = index(book, spreadId); if (old < 0 || newIndex !in book.markers.indices || old == newIndex) return book
-        val out = book.markers.toMutableList(); val marker = out.removeAt(old); out.add(newIndex, marker)
-        return book.copy(markers = out)
-    }
-    fun delete(book: StoryBook, spreadId: String): StoryBook =
-        if (book.markers.size <= 1 || index(book, spreadId) < 0) book else book.copy(markers = book.markers.filterNot { it.spreadId == spreadId })
-
+    /** [splitMs] is an aggregate source offset. Splits inside a physical segment are safe. */
     fun insertAfter(book: StoryBook, anchorId: String, splitMs: Long, newMarker: SpreadMarker): StoryBook {
-        val i = index(book, anchorId); if (i < 0 || newMarker.spreadId == anchorId || book.markers.any { it.spreadId == newMarker.spreadId }) return book
-        val anchor = book.markers[i]
-        if (splitMs < anchor.recordingStartMs + MIN_MS || splitMs > anchor.recordingEndMs - MIN_MS) return book
-        val out = book.markers.toMutableList()
-        val baseTrim = if (anchor.overrideAudioFile == null) clampTrim(anchor, anchor.recordingStartMs, splitMs) else anchor.trimStartMs to anchor.trimEndMs
-        out[i] = anchor.copy(recordingEndMs = splitMs, trimStartMs = baseTrim.first, trimEndMs = baseTrim.second)
-        out.add(i + 1, newMarker.copy(timestampMs = splitMs, recordingStartMs = splitMs, recordingEndMs = anchor.recordingEndMs, overrideAudioFile = null, overrideDurationMs = null, trimStartMs = null, trimEndMs = null))
-        return book.copy(markers = out)
+        val i=index(book,anchorId); if(i<0||book.markers.any{it.spreadId==newMarker.spreadId})return book
+        val anchor=book.markers[i]; val segments=source(book,anchor); val total=NarrationTimeline.duration(segments)
+        if(splitMs<MIN_MS||splitMs>total-MIN_MS)return book
+        val left=NarrationTimeline.clip(segments,0,splitMs); val right=NarrationTimeline.clip(segments,splitMs,total)
+        val out=book.markers.toMutableList(); out[i]=anchor.copy(segments=left,trimStartMs=null,trimEndMs=null,overrideAudioFile=null,overrideDurationMs=null)
+        out.add(i+1,newMarker.copy(segments=right,trimStartMs=null,trimEndMs=null,overrideAudioFile=null,overrideDurationMs=null)); return book.copy(markers=out)
     }
-
-    fun mergeWithNext(book: StoryBook, spreadId: String): StoryBook {
-        val i = index(book, spreadId); if (i !in 0 until book.markers.lastIndex) return book
-        val a = book.markers[i]; val b = book.markers[i + 1]; if (!shareBoundary(a, b)) return book
-        val out = book.markers.toMutableList(); out[i] = a.copy(recordingEndMs = b.recordingEndMs, trimStartMs = null, trimEndMs = null); out.removeAt(i + 1)
-        return book.copy(markers = out)
-    }
-    fun replaceNarration(book: StoryBook, spreadId: String, audioFile: File, durationMs: Long) = if (durationMs <= 0) book else update(book, spreadId) { it.copy(overrideAudioFile = audioFile, overrideDurationMs = durationMs, trimStartMs = null, trimEndMs = null) }
-
-    fun shareBoundary(a: SpreadMarker, b: SpreadMarker) = a.overrideAudioFile == null && b.overrideAudioFile == null && a.recordingEndMs == b.recordingStartMs
-    private fun clampTrim(marker: SpreadMarker, start: Long, end: Long): Pair<Long?, Long?> {
-        if (marker.trimStartMs == null && marker.trimEndMs == null) return null to null
-        val intersectionStart = maxOf(marker.trimStartMs ?: marker.recordingStartMs, start)
-        val intersectionEnd = minOf(marker.trimEndMs ?: marker.recordingEndMs, end)
-        return if (intersectionEnd > intersectionStart) intersectionStart to intersectionEnd else start to end
-    }
-    private fun update(book: StoryBook, id: String, transform: (SpreadMarker) -> SpreadMarker): StoryBook { val i=index(book,id); if(i<0)return book; val out=book.markers.toMutableList(); out[i]=transform(out[i]); return book.copy(markers=out) }
+    fun mergeWithNext(book: StoryBook, spreadId: String): StoryBook { val i=index(book,spreadId); if(i !in 0 until book.markers.lastIndex)return book; val out=book.markers.toMutableList(); val a=out[i]; val b=out[i+1]; out[i]=a.copy(segments=source(book,a)+source(book,b),trimStartMs=null,trimEndMs=null,overrideAudioFile=null,overrideDurationMs=null); out.removeAt(i+1); return book.copy(markers=out, resumeSpreadId=if(book.resumeSpreadId==b.spreadId)a.spreadId else book.resumeSpreadId) }
+    fun replaceNarration(book: StoryBook, spreadId: String, audioFile: File, durationMs: Long) = if(durationMs<=0)book else update(book,spreadId){it.copy(segments=listOf(NarrationSegment(audioFile,0,durationMs)),trimStartMs=null,trimEndMs=null,overrideAudioFile=null,overrideDurationMs=null)}
+    private fun update(book:StoryBook,id:String,transform:(SpreadMarker)->SpreadMarker):StoryBook{val i=index(book,id);if(i<0)return book;val out=book.markers.toMutableList();out[i]=transform(out[i]);return book.copy(markers=out)}
 }
 
-/** One-level model history. Call save(next) before assigning [current]. */
 class StoryEditSession(initial: StoryBook, initialUndo: StoryBook? = null) {
-    var current: StoryBook = initial; private set
-    private var previous: StoryBook? = initialUndo
-    val canUndo get() = previous != null
-    val undoSnapshot get() = previous
-    fun apply(next: StoryBook, save: (StoryBook) -> Unit): StoryBook { if (next == current) return current; save(next); previous=current; current=next; return current }
-    fun undo(save: (StoryBook) -> Unit): StoryBook { val old=previous ?: return current; save(old); previous=null; current=old; return current }
-    fun clearUndo() { previous=null }
+    var current=initial; private set
+    private var previous=initialUndo
+    val canUndo get()=previous!=null
+    val undoSnapshot get()=previous
+    fun apply(next:StoryBook,save:(StoryBook)->Unit):StoryBook{if(next==current)return current;save(next);previous=current;current=next;return current}
+    fun undo(save:(StoryBook)->Unit):StoryBook{val old=previous?:return current;save(old);previous=null;current=old;return current}
+    fun clearUndo(){previous=null}
 }

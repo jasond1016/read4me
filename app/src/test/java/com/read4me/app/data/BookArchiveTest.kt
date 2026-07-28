@@ -39,6 +39,8 @@ class BookArchiveTest {
         File(source, "recording.m4a").writeText("audio")
         File(source, "spreads").mkdir()
         File(source, "spreads/001.jpg").writeText("image")
+        File(source, "manifest.json.pending").writeText("partial save")
+        File(source, "manifest.json.recovery-backup").writeText("old manifest")
         val output = ByteArrayOutputStream()
         BookArchive.export(source, output)
         val names = mutableSetOf<String>()

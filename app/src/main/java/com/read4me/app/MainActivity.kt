@@ -13,6 +13,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.read4me.app.data.StoryRepository
 import com.read4me.app.audio.PersistentWaveformCache
 import com.read4me.app.model.StoryBook
@@ -32,12 +34,17 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+class RecordingRecoveryViewModel : ViewModel() {
+    var pendingCandidate by mutableStateOf<StoryBook?>(null)
+    var finishAfterSave by mutableStateOf(false)
+}
+
 class MainActivity : ComponentActivity() {
     private sealed interface Destination {
         data object Library : Destination
         data object Setup : Destination
         data object ChildReading : Destination
-        data class Recording(val title: String) : Destination
+        data class Recording(val book: StoryBook) : Destination
         data class Review(val book: StoryBook, val initialUndo: StoryBook? = null, val undoImage: java.io.File? = null) : Destination
         data class Rerecord(val book: StoryBook, val spreadId: String) : Destination
         data class Recapture(
@@ -64,7 +71,12 @@ class MainActivity : ComponentActivity() {
         val recognitionHistory = RecognitionHistoryStore(this)
         setContent {
             Read4MeTheme {
-                var destination: Destination by remember { mutableStateOf(Destination.Library) }
+                val recordingRecovery: RecordingRecoveryViewModel = viewModel()
+                var destination: Destination by remember {
+                    mutableStateOf(
+                        recordingRecovery.pendingCandidate?.let(Destination::Recording) ?: Destination.Library,
+                    )
+                }
                 var books by remember { mutableStateOf(repository.loadAll()) }
                 var trashedBooks by remember { mutableStateOf(repository.loadTrash()) }
                 var recognitionSummaries by remember { mutableStateOf(recognitionHistory.summaries()) }
@@ -159,6 +171,13 @@ class MainActivity : ComponentActivity() {
                             }
                         },
                         onOpenBook = { destination = Destination.Review(it) },
+                        onContinueBook = { book ->
+                            val target = Destination.Recording(book)
+                            if (hasCapturePermissions()) destination = target else {
+                                permissionTarget = target
+                                permissionLauncher.launch(arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO))
+                            }
+                        },
                         archiveMessage = archiveMessage,
                         onImport = { importLauncher.launch(arrayOf("application/zip", "application/octet-stream")) },
                         onExport = { book ->
@@ -233,10 +252,12 @@ class MainActivity : ComponentActivity() {
                         message = permissionMessage,
                         onBack = { destination = Destination.Library },
                         onStart = { title ->
+                            val draft = repository.createDraft(title)
+                            books = repository.loadAll()
                             if (hasCapturePermissions()) {
-                                destination = Destination.Recording(title)
+                                destination = Destination.Recording(draft)
                             } else {
-                                permissionTarget = Destination.Recording(title)
+                                permissionTarget = Destination.Recording(draft)
                                 permissionLauncher.launch(
                                     arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO),
                                 )
@@ -245,13 +266,17 @@ class MainActivity : ComponentActivity() {
                     )
 
                     is Destination.Recording -> RecordingScreen(
-                        title = current.title,
+                        book = current.book,
                         repository = repository,
+                        recovery = recordingRecovery,
                         onCancel = {
+                            books = repository.loadAll()
+                            trashedBooks = repository.loadTrash()
                             destination = Destination.Library
                         },
                         onFinished = { book ->
                             books = repository.loadAll()
+                            trashedBooks = repository.loadTrash()
                             destination = Destination.Review(book)
                         },
                     )

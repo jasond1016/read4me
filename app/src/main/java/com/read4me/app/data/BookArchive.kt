@@ -15,7 +15,9 @@ object BookArchive {
     fun export(directory: File, output: OutputStream) {
         require(File(directory, "manifest.json").isFile) { "Book manifest is missing" }
         ZipOutputStream(output.buffered()).use { zip ->
-            directory.walkTopDown().filter(File::isFile).forEach { file ->
+            directory.walkTopDown().filter(File::isFile).filterNot {
+                it.name == "manifest.json.pending" || it.name == "manifest.json.recovery-backup"
+            }.forEach { file ->
                 val name = file.relativeTo(directory).invariantSeparatorsPath
                 require(isSafePath(name)) { "Unsafe book path" }
                 zip.putNextEntry(ZipEntry(name))

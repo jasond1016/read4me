@@ -12,8 +12,8 @@ android {
         applicationId = "com.read4me.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 20
-        versionName = "1.6.0"
+        versionCode = 21
+        versionName = "2.0.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -40,6 +40,7 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.10.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")

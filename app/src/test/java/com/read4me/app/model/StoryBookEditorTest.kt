@@ -1,188 +1,94 @@
 package com.read4me.app.model
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
-import com.read4me.app.model.SpreadReference
 
 class StoryBookEditorTest {
-    @Test fun referenceAddDeleteLastRejectionPrimaryAndSpreadReorderPreserveReferences() {
-        val original = SpreadReference(File("one.jpg"), referenceId = "r1")
-        val added = SpreadReference(File("two.jpg"), referenceId = "r2")
-        val source = book().copy(markers = book().markers.mapIndexed { i, marker ->
-            if (i == 0) marker.copy(references = listOf(original)) else marker
-        })
-        val withTwo = StoryBookEditor.addReference(source, "one", added)
-        assertEquals(listOf("r1", "r2"), withTwo.markers[0].references.map { it.referenceId })
-        val primary = StoryBookEditor.setPrimaryReference(withTwo, "one", "r2")
-        assertEquals(listOf("r2", "r1"), primary.markers[0].references.map { it.referenceId })
-        val one = StoryBookEditor.deleteReference(primary, "one", "r1")
-        assertEquals(one, StoryBookEditor.deleteReference(one, "one", "r2"))
-        val reordered = StoryBookEditor.reorder(primary, "one", 2)
-        assertEquals(listOf("r2", "r1"), reordered.markers[2].references.map { it.referenceId })
-    }
-    @Test
-    fun replacingReferencePreservesTimingAudioAndOtherMarkers() {
-        val source = book()
-        val replacement = File("replacement.jpg")
-        val edited = StoryBookEditor.replaceReference(source, "two", replacement, byteArrayOf(1, 2))
+    private val first = File("first.m4a")
+    private val second = File("second.m4a")
 
-        assertEquals(replacement, edited.markers[1].imageFile)
-        assertEquals(listOf(0L, 1_000L, 2_000L), edited.markers.map { it.timestampMs })
-        assertEquals(source.audioFile, edited.audioFile)
-        assertEquals(source.markers[0], edited.markers[0])
-    }
-
-    @Test
-    fun replacingMissingReferenceOrdinalDoesNothing() {
-        val source = book()
-        assertEquals(source, StoryBookEditor.replaceReference(source, "missing", File("replacement.jpg")))
-    }
-
-    @Test
-    fun movingBoundaryKeepsBothAdjacentSpreadsAtLeastHalfSecondLong() {
-        val edited = StoryBookEditor.moveBoundary(book(), "one", "two", timestampMs = 1_900L)
-
-        assertEquals(1_500L, edited.markers[1].timestampMs)
-    }
-
-    @Test
-    fun trimmingASequenceLeavesSilenceOutOfBothAdjacentSpreads() {
-        val edited = StoryBookEditor.trimNarration(book(), "one", startMs = 200L, endMs = 800L)
-
-        assertEquals(200L, edited.spreads[0].startMs)
-        assertEquals(800L, edited.spreads[0].endMs)
-        assertEquals(1_000L, edited.spreads[1].startMs)
-    }
-
-    @Test
-    fun trimmingLastSequenceCanRemoveTrailingSilence() {
-        val edited = StoryBookEditor.trimNarration(book(), "two", startMs = 1_100L, endMs = 1_700L)
-
-        assertEquals(1_100L, edited.spreads[1].startMs)
-        assertEquals(1_700L, edited.spreads[1].endMs)
-    }
-
-    @Test
-    fun replacingNarrationResetsTrimsToTheNewRecording() {
-        val trimmed = StoryBookEditor.trimNarration(book(), "one", startMs = 200L, endMs = 800L)
-        val edited = StoryBookEditor.replaceNarration(trimmed, "one", File("override.m4a"), 1_200L)
-
-        assertEquals(0L, edited.spreads[0].startMs)
-        assertEquals(1_200L, edited.spreads[0].endMs)
-    }
-
-    @Test
-    fun mergeRejectsOverrideAndOnlyMergesContiguousBaseRanges() {
-        val source = book().copy(
-            markers = book().markers.mapIndexed { index, marker ->
-                if (index == 0) marker.copy(overrideAudioFile = File("override.m4a"), overrideDurationMs = 800L)
-                else marker
-            },
+    @Test fun aggregateClipCrossesFilesAndMapsOffsets() {
+        val source = listOf(NarrationSegment(first, 100, 1_100), NarrationSegment(second, 500, 2_000))
+        assertEquals(
+            listOf(NarrationSegment(first, 900, 1_100), NarrationSegment(second, 500, 1_300)),
+            NarrationTimeline.clip(source, 800, 1_800),
         )
-
-        val merged = StoryBookEditor.mergeWithNext(source, "one")
-
-        assertEquals(source, merged)
+        assertEquals(NarrationTimeline.Position(1, 700), NarrationTimeline.map(source, 1_200))
     }
 
-    @Test fun reorderPreservesStableIdentityMediaAndAudioAllocation() {
-        val source = book()
-        val edited = StoryBookEditor.reorder(source, "three", 0)
-        assertEquals(listOf("three", "one", "two"), edited.markers.map { it.spreadId })
-        assertEquals(2_000L, edited.markers.first().recordingStartMs)
-        assertEquals(source.markers.first { it.spreadId == "three" }, edited.markers.first())
+    @Test fun spreadExposesSourceAndNonDestructivelyTrimmedEffectiveSegments() {
+        val book = book(listOf(marker("one", listOf(NarrationSegment(first, 0, 1_000), NarrationSegment(second, 0, 1_000)))))
+        val edited = StoryBookEditor.trimNarration(book, "one", 750, 1_500)
+        assertEquals(book.markers[0].segments, edited.spreads[0].sourceSegments)
+        assertEquals(listOf(NarrationSegment(first, 750, 1_000), NarrationSegment(second, 0, 500)), edited.spreads[0].effectiveSegments)
+        assertEquals(750, edited.playableDurationMs)
     }
 
-    @Test fun insertSplitsAllocationWithoutGapOrOverlapAndDeleteLeavesItUnassigned() {
-        val source = book()
-        val inserted = StoryBookEditor.insertAfter(source, "one", 500L,
-            SpreadMarker(0L, MarkerSource.MANUAL, listOf(SpreadReference(File("new.jpg"))), spreadId = "new"))
-        assertEquals(500L, inserted.markers[0].recordingEndMs)
-        assertEquals(500L, inserted.markers[1].recordingStartMs)
-        assertEquals(1_000L, inserted.markers[1].recordingEndMs)
-        val deleted = StoryBookEditor.delete(inserted, "new")
-        assertEquals(500L, deleted.markers[0].recordingEndMs)
-        assertEquals(1_000L, deleted.markers[1].recordingStartMs)
+    @Test fun sharedBoundaryRequiresSameContiguousPhysicalFile() {
+        assertTrue(StoryBookEditor.shareBoundary(marker("a", listOf(NarrationSegment(first, 0, 1_000))), marker("b", listOf(NarrationSegment(first, 1_000, 2_000)))))
+        assertFalse(StoryBookEditor.shareBoundary(marker("a", listOf(NarrationSegment(first, 0, 1_000))), marker("b", listOf(NarrationSegment(second, 1_000, 2_000)))))
     }
 
-    @Test fun insertRejectsTooShortMissingAndDuplicateAnchorsButAllowsOverrideDonor() {
-        val source = book()
-        val marker = SpreadMarker(0L, MarkerSource.MANUAL, listOf(SpreadReference(File("new.jpg"))), spreadId = "new")
-        assertEquals(source, StoryBookEditor.insertAfter(source, "missing", 500L, marker))
-        assertEquals(source, StoryBookEditor.insertAfter(source, "one", 499L, marker))
-        assertEquals(source, StoryBookEditor.insertAfter(source, "one", 501L, source.markers[1]))
-        val overridden = source.copy(markers = source.markers.mapIndexed { i, item ->
-            if (i == 0) item.copy(overrideAudioFile = File("override.m4a"), overrideDurationMs = 1_000L) else item
-        })
-        val inserted = StoryBookEditor.insertAfter(overridden, "one", 500L, marker)
-        assertEquals(File("override.m4a"), inserted.markers[0].overrideAudioFile)
-        assertEquals("new", inserted.markers[1].spreadId)
-        assertEquals(null, inserted.markers[1].overrideAudioFile)
+    @Test fun movingTooShortSharedBoundaryIsRejectedWithoutThrowing() {
+        val source = book(listOf(
+            marker("a", listOf(NarrationSegment(first, 0, 400))),
+            marker("b", listOf(NarrationSegment(first, 400, 800))),
+        ))
+
+        assertEquals(source, StoryBookEditor.moveBoundary(source, "a", "b", 400))
     }
 
-    @Test fun trimmedBaseInsertNeverHidesAnchorAndResetsDisjointTrimToNewRange() {
-        val source = book().copy(markers = book().markers.mapIndexed { i, marker ->
-            if (i == 0) marker.copy(trimStartMs = 700L, trimEndMs = 900L) else marker
-        })
-        val inserted = StoryBookEditor.insertAfter(source, "one", 500L,
-            SpreadMarker(0L, MarkerSource.MANUAL, emptyList(), spreadId = "suffix"))
-        assertEquals(3 + 1, inserted.spreads.size)
-        assertEquals(0L to 500L, inserted.spreads.first().startMs to inserted.spreads.first().endMs)
-        assertEquals("suffix", inserted.markers[1].spreadId)
-        assertEquals(null, inserted.markers[1].trimStartMs)
+    @Test fun mergeConcatenatesNarrationAndReorderPreservesIdentity() {
+        val book = book(listOf(marker("a", listOf(NarrationSegment(first, 0, 800))), marker("b", listOf(NarrationSegment(second, 0, 900)))))
+        val merged = StoryBookEditor.mergeWithNext(book, "a")
+        assertEquals(listOf(NarrationSegment(first, 0, 800), NarrationSegment(second, 0, 900)), merged.markers.single().segments)
+        val three = book.copy(markers = book.markers + marker("c", listOf(NarrationSegment(first, 2_000, 3_000))))
+        assertEquals(listOf("c", "a", "b"), StoryBookEditor.reorder(three, "c", 0).markers.map { it.spreadId })
     }
 
-    @Test fun overrideDonorKeepsOverrideRelativeTrimsAndSuffixUsesBaseAudio() {
-        val override = File("override.m4a")
-        val source = book().copy(markers = book().markers.mapIndexed { i, marker ->
-            if (i == 0) marker.copy(overrideAudioFile = override, overrideDurationMs = 900L, trimStartMs = 100L, trimEndMs = 800L) else marker
-        })
-        val inserted = StoryBookEditor.insertAfter(source, "one", 500L,
-            SpreadMarker(0L, MarkerSource.MANUAL, emptyList(), spreadId = "suffix"))
-        assertEquals(100L to 800L, inserted.markers[0].trimStartMs to inserted.markers[0].trimEndMs)
-        assertEquals(override, inserted.spreads[0].audioFile)
-        assertEquals(source.audioFile, inserted.spreads[1].audioFile)
-        assertEquals(500L to 1_000L, inserted.spreads[1].startMs to inserted.spreads[1].endMs)
+    @Test fun insertionSplitsInsidePhysicalSegmentWithoutReencoding() {
+        val book = book(listOf(marker("a", listOf(NarrationSegment(first, 100, 2_100)))))
+        val inserted = StoryBookEditor.insertAfter(book, "a", 750, marker("b", emptyList()))
+        assertEquals(listOf(NarrationSegment(first, 100, 850)), inserted.markers[0].segments)
+        assertEquals(listOf(NarrationSegment(first, 850, 2_100)), inserted.markers[1].segments)
     }
 
-    @Test fun editingByIdAfterReorderTargetsRequestedSpread() {
-        val reordered = StoryBookEditor.reorder(book(), "three", 0)
-        val edited = StoryBookEditor.trimNarration(reordered, "one", 100L, 800L)
-        assertEquals(100L, edited.markers.first { it.spreadId == "one" }.trimStartMs)
-        assertEquals(null, edited.markers.first { it.spreadId == "three" }.trimStartMs)
+    @Test fun reorderPreservesResumeCursor() {
+        val source = book(listOf(marker("a", listOf(NarrationSegment(first, 0, 800))), marker("b", listOf(NarrationSegment(second, 0, 900))))).copy(resumeSpreadId = "a")
+        assertEquals("a", StoryBookEditor.reorder(source, "a", 1).resumeSpreadId)
     }
 
-    @Test fun insertionAllocatesExactlyTheAnchorBaseRange() {
-        val source = book()
-        val inserted = StoryBookEditor.insertAfter(source, "two", 1_500L,
-            SpreadMarker(0L, MarkerSource.MANUAL, emptyList(), spreadId = "new"))
-        assertEquals(listOf(1_000L to 1_500L, 1_500L to 2_000L),
-            inserted.markers.slice(1..2).map { it.recordingStartMs to it.recordingEndMs })
-        assertEquals(MarkerSource.MANUAL, inserted.markers[2].source)
+    @Test fun deletingCursorPicksNextThenPreviousDeterministically() {
+        val source = book(listOf(marker("a", listOf(NarrationSegment(first, 0, 800))), marker("b", listOf(NarrationSegment(second, 0, 900))), marker("c", listOf(NarrationSegment(first, 900, 1800))))).copy(resumeSpreadId = "b")
+        assertEquals("c", StoryBookEditor.delete(source, "b").resumeSpreadId)
+        assertEquals("b", StoryBookEditor.delete(source.copy(resumeSpreadId = "c"), "c").resumeSpreadId)
     }
 
-    @Test fun soleSpreadCannotBeDeletedAndSessionUndoPersistsBeforePublishing() {
-        val one = book().copy(markers = book().markers.take(1))
-        assertEquals(one, StoryBookEditor.delete(one, "one"))
-        val session = StoryEditSession(book())
-        val reordered = StoryBookEditor.reorder(session.current, "three", 0)
-        val saved = mutableListOf<StoryBook>()
-        session.apply(reordered, saved::add)
-        assertEquals(reordered, saved.last())
-        assertEquals(book(), session.undo(saved::add))
+    @Test fun mergeMapsRightCursorToLeft() {
+        val source = book(listOf(marker("a", listOf(NarrationSegment(first, 0, 800))), marker("b", listOf(NarrationSegment(second, 0, 900))))).copy(resumeSpreadId = "b")
+        assertEquals("a", StoryBookEditor.mergeWithNext(source, "a").resumeSpreadId)
     }
 
-    private fun book() = StoryBook(
-        id = "book",
-        title = "Story",
-        directory = File("."),
-        audioFile = File("recording.m4a"),
-        durationMs = 2_000L,
-        markers = listOf(
-            SpreadMarker(0L, MarkerSource.INITIAL, emptyList(), spreadId = "one", recordingStartMs = 0L, recordingEndMs = 1_000L),
-            SpreadMarker(1_000L, MarkerSource.MANUAL, emptyList(), spreadId = "two", recordingStartMs = 1_000L, recordingEndMs = 2_000L),
-            SpreadMarker(2_000L, MarkerSource.MANUAL, emptyList(), spreadId = "three", recordingStartMs = 2_000L, recordingEndMs = 2_500L),
-        ),
-    )
+    @Test fun referencePrimaryDeleteAndReplace() {
+        val one = SpreadReference(File("one.jpg"), referenceId = "one")
+        val two = SpreadReference(File("two.jpg"), referenceId = "two")
+        val source = book(listOf(marker("a", listOf(NarrationSegment(first, 0, 800))).copy(references = listOf(one))))
+        val added = StoryBookEditor.addReference(source, "a", two)
+        assertEquals("two", StoryBookEditor.setPrimaryReference(added, "a", "two").markers[0].references[0].referenceId)
+        assertEquals(1, StoryBookEditor.deleteReference(added, "a", "one").markers[0].references.size)
+        assertEquals(File("new.jpg"), StoryBookEditor.replaceReference(source, "a", File("new.jpg")).markers[0].imageFile)
+    }
+
+    @Test fun editSessionUndoRestoresPreviousBook() {
+        val source = book(listOf(marker("a", listOf(NarrationSegment(first, 0, 800))), marker("b", listOf(NarrationSegment(second, 0, 900)))))
+        val session = StoryEditSession(source)
+        session.apply(StoryBookEditor.reorder(source, "b", 0)) {}
+        assertEquals(source, session.undo {})
+    }
+
+    private fun marker(id: String, segments: List<NarrationSegment>) = SpreadMarker(0, MarkerSource.MANUAL, emptyList(), segments = segments, spreadId = id)
+    private fun book(markers: List<SpreadMarker>) = StoryBook("id", "title", File("."), first, 0, markers)
 }
