@@ -49,11 +49,46 @@ class StoryBookEditorTest {
         assertEquals(listOf("c", "a", "b"), StoryBookEditor.reorder(three, "c", 0).markers.map { it.spreadId })
     }
 
+    @Test fun mergePreservesOnlyTheAudibleRanges() {
+        val source = book(listOf(
+            marker("a", listOf(NarrationSegment(first, 0, 2_000))).copy(trimStartMs = 500, trimEndMs = 1_500),
+            marker("b", listOf(NarrationSegment(second, 100, 2_100))).copy(trimStartMs = 250, trimEndMs = 1_250),
+        ))
+
+        val merged = StoryBookEditor.mergeWithNext(source, "a")
+
+        assertEquals(
+            listOf(NarrationSegment(first, 500, 1_500), NarrationSegment(second, 350, 1_350)),
+            merged.markers.single().segments,
+        )
+        assertEquals(source.playableDurationMs, merged.playableDurationMs)
+    }
+
     @Test fun insertionSplitsInsidePhysicalSegmentWithoutReencoding() {
         val book = book(listOf(marker("a", listOf(NarrationSegment(first, 100, 2_100)))))
         val inserted = StoryBookEditor.insertAfter(book, "a", 750, marker("b", emptyList()))
         assertEquals(listOf(NarrationSegment(first, 100, 850)), inserted.markers[0].segments)
         assertEquals(listOf(NarrationSegment(first, 850, 2_100)), inserted.markers[1].segments)
+    }
+
+    @Test fun insertionSplitsOnlyTheAudibleRange() {
+        val source = book(listOf(
+            marker("a", listOf(NarrationSegment(first, 100, 2_100))).copy(trimStartMs = 500, trimEndMs = 1_500),
+        ))
+
+        val inserted = StoryBookEditor.insertAfter(source, "a", 500, marker("b", emptyList()))
+
+        assertEquals(listOf(NarrationSegment(first, 600, 1_100)), inserted.markers[0].segments)
+        assertEquals(listOf(NarrationSegment(first, 1_100, 1_600)), inserted.markers[1].segments)
+        assertEquals(source.playableDurationMs, inserted.playableDurationMs)
+    }
+
+    @Test fun insertionRejectsAnEffectivelyShortSpread() {
+        val source = book(listOf(
+            marker("a", listOf(NarrationSegment(first, 0, 2_000))).copy(trimStartMs = 500, trimEndMs = 1_499),
+        ))
+
+        assertEquals(source, StoryBookEditor.insertAfter(source, "a", 500, marker("b", emptyList())))
     }
 
     @Test fun reorderPreservesResumeCursor() {

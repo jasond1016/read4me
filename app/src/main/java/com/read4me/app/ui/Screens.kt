@@ -52,7 +52,6 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.RangeSlider
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -96,7 +95,6 @@ import com.read4me.app.audio.AudioSegmentPlayer
 import com.read4me.app.audio.AudioBookPlaybackService
 import com.read4me.app.audio.PersistentWaveformCache
 import com.read4me.app.audio.StoryAudioRecorder
-import com.read4me.app.audio.WaveformMath
 import com.read4me.app.audio.allocateWaveformBuckets
 import com.read4me.app.data.StoryRepository
 import com.read4me.app.model.MarkerSource
@@ -108,7 +106,6 @@ import com.read4me.app.model.SpreadReference
 import com.read4me.app.model.PhotoQuality
 import com.read4me.app.model.StoryBook
 import com.read4me.app.model.StoryBookEditor
-import com.read4me.app.model.StoryEditSession
 import com.read4me.app.model.StorySpread
 import com.read4me.app.model.StoryStatus
 import com.read4me.app.model.allocateRecordingSession
@@ -1810,7 +1807,7 @@ fun InsertSpreadScreen(
 ) {
     val anchor = book.markers.firstOrNull { it.spreadId == anchorSpreadId }
     val anchorSpread = book.spreads.firstOrNull { it.spreadId == anchorSpreadId }
-    val anchorDuration = anchorSpread?.sourceSegments?.let(NarrationTimeline::duration) ?: 0L
+    val anchorDuration = anchorSpread?.durationMs ?: 0L
     if (anchor == null || anchorSpread == null || anchorDuration < 1_000L) {
         LaunchedEffect(Unit) { onCancel() }
         return
@@ -1865,7 +1862,7 @@ fun InsertSpreadScreen(
     LaunchedEffect(photoReady) {
         if (photoReady && waveform == null) waveform = withContext(Dispatchers.IO) {
             runCatching {
-                compositeWaveform(persistentWaveforms, anchorSpread.sourceSegments)
+                compositeWaveform(persistentWaveforms, anchorSpread.effectiveSegments)
             }.getOrNull()
         }
     }
@@ -1911,13 +1908,13 @@ fun InsertSpreadScreen(
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedButton(onClick = {
                     player.play(
-                        NarrationTimeline.clip(anchorSpread.sourceSegments, (split.toLong() - 2_000L).coerceAtLeast(0), split.toLong()),
+                        NarrationTimeline.clip(anchorSpread.effectiveSegments, (split.toLong() - 2_000L).coerceAtLeast(0), split.toLong()),
                         onError = { message = "旁白文件不可用" },
                     )
                 }, modifier = Modifier.weight(1f)) { Text("试听左侧结尾") }
                 OutlinedButton(onClick = {
                     player.play(
-                        NarrationTimeline.clip(anchorSpread.sourceSegments, split.toLong(), (split.toLong() + 2_000L).coerceAtMost(anchorDuration)),
+                        NarrationTimeline.clip(anchorSpread.effectiveSegments, split.toLong(), (split.toLong() + 2_000L).coerceAtMost(anchorDuration)),
                         onError = { message = "旁白文件不可用" },
                     )
                 }, modifier = Modifier.weight(1f)) { Text("试听右侧开头") }
@@ -1935,7 +1932,6 @@ fun InsertSpreadScreen(
                         spreadId = newId,
                     ))
                     check(updated !== book)
-                    repository.save(updated)
                     updated
                 }.onSuccess { onFinished(it, book, installed!!) }.onFailure {
                     installed?.delete(); busy = false; message = "插入失败，绘本没有改变"
@@ -2061,520 +2057,8 @@ fun RerecordScreen(
     }
 }
 
-@Composable
-fun ReviewScreen(
-    book: StoryBook,
-    repository: StoryRepository,
-    onRerecord: (StoryBook, String) -> Unit,
-    onRecapture: (StoryBook, String, StoryBook?, File?) -> Unit,
-    onInsert: (StoryBook, String, StoryBook?, File?) -> Unit,
-    onPlayBook: (StoryBook) -> Unit,
-    initialUndo: StoryBook? = null,
-    initialUndoImage: File? = null,
-    onBack: () -> Unit,
-) {
-    val context = LocalContext.current
-    val player = remember { AudioSegmentPlayer(context.applicationContext) }
-    val persistentWaveforms = remember(context.cacheDir) {
-        PersistentWaveformCache(File(context.cacheDir, "read4me/waveforms"))
-    }
-    val editSession = remember(book.id, book.markers.map { it.spreadId }) { StoryEditSession(book, initialUndo) }
-    var editableBook by remember(book.id) { mutableStateOf(book) }
-    var undoImage by remember(book.id) { mutableStateOf(initialUndoImage) }
-    var playingSpreadId by remember { mutableStateOf<String?>(null) }
-    var previewPositionMs by remember { mutableStateOf<Long?>(null) }
-    var playbackError by remember { mutableStateOf<String?>(null) }
-    val waveformCache = remember(book.id) { mutableStateMapOf<WaveformCacheKey, FloatArray>() }
-    DisposableEffect(Unit) { onDispose { player.stop() } }
 
-    LaunchedEffect(editableBook) {
-        editableBook.spreads.forEach { spread ->
-            val key = waveformCacheKey(editableBook, spread)
-            if (waveformCache[key] == null) {
-                waveformCache[key] = withContext(Dispatchers.IO) {
-                    runCatching {
-                        compositeWaveform(persistentWaveforms, spread.sourceSegments)
-                    }.getOrElse { FloatArray(0) }
-                }
-            }
-        }
-    }
-
-    fun setBoundary(leftId: String, rightId: String, timestampMs: Long) {
-        player.stop()
-        playingSpreadId = null
-        previewPositionMs = null
-        editableBook = editSession.apply(StoryBookEditor.moveBoundary(editableBook, leftId, rightId, timestampMs), repository::save)
-    }
-
-    fun trimNarration(spreadId: String, startMs: Long, endMs: Long) {
-        player.stop()
-        playingSpreadId = null
-        previewPositionMs = null
-        editableBook = editSession.apply(StoryBookEditor.trimNarration(editableBook, spreadId, startMs, endMs), repository::save)
-    }
-
-    fun mergeWithNext(spreadId: String) {
-        player.stop()
-        playingSpreadId = null
-        previewPositionMs = null
-        editableBook = editSession.apply(StoryBookEditor.mergeWithNext(editableBook, spreadId), repository::save)
-    }
-
-    fun returnToLibrary() {
-        player.stop()
-        playingSpreadId = null
-        previewPositionMs = null
-        onBack()
-    }
-
-    BackHandler(onBack = ::returnToLibrary)
-
-    Surface(Modifier.fillMaxSize(), color = Paper) {
-        Column(Modifier.fillMaxSize()) {
-            Surface(
-                color = Color.White,
-                shadowElevation = 4.dp,
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().statusBarsPadding().height(64.dp).padding(horizontal = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    TextButton(onClick = ::returnToLibrary) {
-                        Text("← 返回书架", color = Moss, fontWeight = FontWeight.Bold)
-                    }
-                    Text(
-                        editableBook.title,
-                        style = MaterialTheme.typography.titleMedium,
-                        color = Ink,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
-                    )
-                    if (editableBook.status == StoryStatus.COMPLETE && editableBook.spreads.any { it.effectiveSegments.isNotEmpty() } &&
-                        editableBook.spreads.flatMap { it.effectiveSegments }.all { it.file.isFile }) {
-                        TextButton(onClick = { player.stop(); onPlayBook(editableBook) }) {
-                            Text("整本播放", color = Coral, fontWeight = FontWeight.Bold)
-                        }
-                    }
-                }
-            }
-            LazyColumn(
-                modifier = Modifier.weight(1f),
-                contentPadding = PaddingValues(horizontal = 20.dp, vertical = 28.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp),
-            ) {
-                item {
-                Text("陪读已经留下来了", style = MaterialTheme.typography.headlineLarge)
-                Text(
-                    editableBook.title,
-                    style = MaterialTheme.typography.titleLarge,
-                    color = Moss,
-                    modifier = Modifier.padding(top = 8.dp),
-                )
-                Text(
-                    "${editableBook.spreads.size} 个书面 · ${formatDuration(editableBook.playableDurationMs)}。逐个试听，拖动两个手柄修剪每页首尾。",
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = Ink.copy(alpha = 0.68f),
-                    modifier = Modifier.padding(top = 8.dp, bottom = 8.dp),
-                )
-                Button(enabled = editSession.canUndo, onClick = {
-                    player.stop()
-                    playingSpreadId = null
-                    editableBook = editSession.undo(repository::save)
-                    undoImage?.takeIf { image ->
-                        editableBook.markers.none { marker -> marker.references.any { it.file == image } }
-                    }?.delete()
-                    undoImage = null
-                }) { Text("撤销上一步") }
-                playbackError?.let { Text(it, color = Coral, modifier = Modifier.padding(top = 8.dp)) }
-            }
-            items(editableBook.spreads, key = { it.spreadId }) { spread ->
-                val markerIndex = editableBook.markers.indexOfFirst { it.spreadId == spread.spreadId }
-                val marker = editableBook.markers[markerIndex]
-                val sourceStartMs = 0L
-                val sourceEndMs = NarrationTimeline.duration(spread.sourceSegments)
-                val waveformKey = waveformCacheKey(editableBook, spread)
-                val nextMarker = editableBook.markers.getOrNull(markerIndex + 1)
-                val hasSharedBoundary = nextMarker != null && StoryBookEditor.shareBoundary(marker, nextMarker)
-                SpreadReviewCard(
-                    spread = spread,
-                    playing = playingSpreadId == spread.spreadId,
-                    previewPositionMs = previewPositionMs?.takeIf { playingSpreadId == spread.spreadId },
-                    waveform = waveformCache[waveformKey],
-                    trimRange = sourceStartMs.toFloat()..sourceEndMs.toFloat(),
-                    boundaryValueMs = marker.segments.lastOrNull()?.endMs?.takeIf { hasSharedBoundary },
-                    boundaryRange = if (hasSharedBoundary) {
-                        val minimum = marker.segments.last().startMs + 500L
-                        val maximum = requireNotNull(nextMarker).segments.first().endMs - 500L
-                        minimum.toFloat()..maximum.toFloat()
-                    } else {
-                        null
-                    },
-                    onTrimChanged = { startMs, endMs ->
-                        trimNarration(spread.spreadId, startMs, endMs)
-                    },
-                    onBoundaryChanged = { nextMarker?.let { next -> setBoundary(spread.spreadId, next.spreadId, it) } },
-                    onMergeNext = if (hasSharedBoundary) {
-                        { mergeWithNext(spread.spreadId) }
-                    } else null,
-                    onRerecord = { onRerecord(editableBook, spread.spreadId) },
-                    onRecapture = {
-                        onRecapture(editableBook, spread.spreadId, editSession.undoSnapshot, undoImage)
-                    },
-                    onDeleteReference = { referenceId -> editableBook = editSession.apply(StoryBookEditor.deleteReference(editableBook, spread.spreadId, referenceId), repository::save) },
-                    onSetPrimary = { referenceId -> editableBook = editSession.apply(StoryBookEditor.setPrimaryReference(editableBook, spread.spreadId, referenceId), repository::save) },
-                    onMoveUp = if (spread.ordinal > 1) {{ editableBook = editSession.apply(StoryBookEditor.reorder(editableBook, spread.spreadId, spread.ordinal - 2), repository::save) }} else null,
-                    onMoveDown = if (spread.ordinal < editableBook.spreads.size) {{ editableBook = editSession.apply(StoryBookEditor.reorder(editableBook, spread.spreadId, spread.ordinal), repository::save) }} else null,
-                    onDelete = if (editableBook.markers.size > 1) {{ editableBook = editSession.apply(StoryBookEditor.delete(editableBook, spread.spreadId), repository::save) }} else null,
-                    onInsert = if (sourceEndMs >= 1_000L) {
-                        { onInsert(editableBook, spread.spreadId, editSession.undoSnapshot, undoImage) }
-                    } else null,
-                    onPlay = {
-                        if (playingSpreadId == spread.spreadId) {
-                            player.stop()
-                            playingSpreadId = null
-                            previewPositionMs = null
-                        } else {
-                            playingSpreadId = spread.spreadId
-                            previewPositionMs = null
-                            playbackError = null
-                            if (!player.play(
-                                    spread.effectiveSegments,
-                                    onError = {
-                                        playingSpreadId = null
-                                        previewPositionMs = null
-                                        playbackError = "旁白文件不可用"
-                                    },
-                                    onFinished = {
-                                        playingSpreadId = null
-                                        previewPositionMs = null
-                                    },
-                                )) playingSpreadId = null
-                        }
-                    },
-                    onPreview = { startMs, endMs ->
-                        player.stop()
-                        playingSpreadId = spread.spreadId
-                        previewPositionMs = startMs
-                        playbackError = null
-                        if (!player.play(
-                                NarrationTimeline.clip(spread.sourceSegments, startMs, endMs),
-                                onError = {
-                                    playingSpreadId = null
-                                    previewPositionMs = null
-                                    playbackError = "旁白文件不可用"
-                                },
-                                onFinished = {
-                                    playingSpreadId = null
-                                    previewPositionMs = null
-                                },
-                            )) { playingSpreadId = null; previewPositionMs = null }
-                    },
-                )
-            }
-                item {
-                    Text(
-                        "修剪只改变播放范围，不会删除原始录音；随时可以重新调整。",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = Ink.copy(alpha = 0.5f),
-                        modifier = Modifier.padding(bottom = 30.dp),
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun SpreadReviewCard(
-    spread: StorySpread,
-    playing: Boolean,
-    previewPositionMs: Long?,
-    waveform: FloatArray?,
-    trimRange: ClosedFloatingPointRange<Float>,
-    boundaryValueMs: Long?,
-    boundaryRange: ClosedFloatingPointRange<Float>?,
-    onTrimChanged: (Long, Long) -> Unit,
-    onBoundaryChanged: (Long) -> Unit,
-    onMergeNext: (() -> Unit)?,
-    onRerecord: () -> Unit,
-    onRecapture: () -> Unit,
-    onDeleteReference: (String) -> Unit,
-    onSetPrimary: (String) -> Unit,
-    onMoveUp: (() -> Unit)?,
-    onMoveDown: (() -> Unit)?,
-    onDelete: (() -> Unit)?,
-    onInsert: (() -> Unit)?,
-    onPlay: () -> Unit,
-    onPreview: (Long, Long) -> Unit,
-) {
-    var confirmDelete by remember { mutableStateOf(false) }
-    var trimValue by remember(spread.trimStartMs, spread.trimEndMs) {
-        mutableStateOf(spread.trimStartMs.toFloat()..spread.trimEndMs.toFloat())
-    }
-    var boundaryValue by remember(boundaryValueMs) {
-        mutableFloatStateOf((boundaryValueMs ?: 0L).toFloat())
-    }
-    var dismissedTrimSuggestion by remember(spread.spreadId, waveform) { mutableStateOf(false) }
-    val trimSuggestion = remember(waveform, trimRange, spread.sourceSegments.size) {
-        waveform?.takeIf { spread.sourceSegments.size == 1 }?.let {
-            WaveformMath.suggestSilenceTrim(
-                peaks = it,
-                sourceStartMs = trimRange.start.toLong(),
-                sourceEndMs = trimRange.endInclusive.toLong(),
-            )
-        }
-    }
-    Card(
-        shape = RoundedCornerShape(22.dp),
-        colors = CardDefaults.cardColors(containerColor = SoftWhite),
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            StoryImage(
-                file = spread.imageFile,
-                modifier = Modifier.size(width = 118.dp, height = 88.dp).clip(RoundedCornerShape(14.dp)),
-            )
-            Column(Modifier.padding(start = 14.dp).weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("书面 ${spread.ordinal}", style = MaterialTheme.typography.titleLarge)
-                    if (spread.source == MarkerSource.AUTOMATIC) {
-                        Text(
-                            " 自动",
-                            color = Moss,
-                            style = MaterialTheme.typography.bodyMedium,
-                            modifier = Modifier.padding(start = 5.dp),
-                        )
-                    }
-                }
-                Text(
-                    "可播放 ${formatDuration(spread.durationMs)}",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = Ink.copy(alpha = 0.58f),
-                    modifier = Modifier.padding(top = 4.dp),
-                )
-                Text("${spread.references.size} 张参考照片 · ${qualityLabel(spread.references.firstOrNull()?.quality)}",
-                    style = MaterialTheme.typography.bodyMedium, color = Ink.copy(alpha = .68f))
-                OutlinedButton(
-                    onClick = onPlay,
-                    shape = RoundedCornerShape(14.dp),
-                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp),
-                    modifier = Modifier.padding(top = 7.dp),
-                ) { Text(if (playing) "停止" else "▶ 试听") }
-                TextButton(
-                    onClick = onRecapture,
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                ) { Text("添加参考照片") }
-            }
-        }
-        if (spread.references.isNotEmpty()) {
-            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp)) {
-                spread.references.forEachIndexed { index, reference ->
-                    Column(Modifier.padding(end = 8.dp)) {
-                        StoryImage(
-                            file = reference.file,
-                            modifier = Modifier.size(width = 96.dp, height = 72.dp).clip(RoundedCornerShape(10.dp)),
-                        )
-                        Text("照片 ${index + 1}${if (index == 0) "（主图）" else ""}")
-                        Text(qualityLabel(reference.quality), style = MaterialTheme.typography.bodyMedium)
-                        if (index > 0) TextButton(onClick = { onSetPrimary(reference.referenceId) }) { Text("设为主图") }
-                        if (spread.references.size > 1) {
-                            TextButton(onClick = { onDeleteReference(reference.referenceId) }) { Text("删除") }
-                        }
-                    }
-                }
-            }
-        }
-        if (trimRange.endInclusive - trimRange.start >= 500f) {
-            Column(Modifier.padding(start = 14.dp, end = 14.dp, bottom = 14.dp)) {
-                Text(
-                    "修剪本书面 · ${formatBoundary(trimValue.start.toLong())} — ${formatBoundary(trimValue.endInclusive.toLong())}",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = Ink.copy(alpha = 0.62f),
-                )
-                Text(
-                    "拖动左右手柄；手柄外的空白不会播放，也不会归到相邻书面。",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = Ink.copy(alpha = 0.48f),
-                )
-                if (!dismissedTrimSuggestion && trimSuggestion != null &&
-                    (trimValue.start.toLong() != trimSuggestion.startMs || trimValue.endInclusive.toLong() != trimSuggestion.endMs)
-                ) {
-                    Surface(
-                        color = Honey.copy(alpha = .2f),
-                        shape = RoundedCornerShape(14.dp),
-                        modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
-                    ) {
-                        Column(Modifier.padding(12.dp)) {
-                            Text("检测到可能的首尾空白", fontWeight = FontWeight.Bold)
-                            Text(
-                                "建议跳过开头 ${formatBoundary(trimSuggestion.removedFromStart(trimRange.start.toLong()))}、结尾 ${formatBoundary(trimSuggestion.removedFromEnd(trimRange.endInclusive.toLong()))}。只调整播放范围，不删除原始录音。",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = Ink.copy(alpha = .68f),
-                            )
-                            Row(
-                                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                            ) {
-                                TextButton(onClick = {
-                                    onPreview(trimSuggestion.startMs, minOf(trimSuggestion.startMs + 2_000L, trimSuggestion.endMs))
-                                }) { Text("试听建议开头") }
-                                TextButton(onClick = {
-                                    onPreview(maxOf(trimSuggestion.startMs, trimSuggestion.endMs - 2_000L), trimSuggestion.endMs)
-                                }) { Text("试听建议结尾") }
-                                Button(
-                                    onClick = {
-                                        trimValue = trimSuggestion.startMs.toFloat()..trimSuggestion.endMs.toFloat()
-                                        onTrimChanged(trimSuggestion.startMs, trimSuggestion.endMs)
-                                    },
-                                    colors = ButtonDefaults.buttonColors(containerColor = Moss),
-                                ) { Text("采用建议") }
-                                TextButton(onClick = { dismissedTrimSuggestion = true }) { Text("忽略") }
-                            }
-                        }
-                    }
-                }
-                RangeSlider(
-                    value = trimValue,
-                    onValueChange = {
-                        if (it.endInclusive - it.start >= 500f) trimValue = it
-                    },
-                    onValueChangeFinished = {
-                        onTrimChanged(trimValue.start.toLong(), trimValue.endInclusive.toLong())
-                    },
-                    valueRange = trimRange,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                val peaks = waveform
-                if (peaks == null) {
-                    Text("正在读取波形…", style = MaterialTheme.typography.bodyMedium, color = Ink.copy(alpha = .45f))
-                } else if (peaks.isNotEmpty()) {
-                    val waveformColor = Moss
-                    val playheadColor = Color(0xFFC85A3C)
-                    Canvas(
-                        Modifier
-                            .fillMaxWidth()
-                            .height(52.dp)
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(Paper)
-                            .pointerInput(peaks, trimRange) {
-                                detectTapGestures { offset ->
-                                    val fraction = (offset.x / size.width).coerceIn(0f, 1f)
-                                    val position = (trimRange.start + fraction *
-                                        (trimRange.endInclusive - trimRange.start)).toLong()
-                                        .coerceAtMost(trimRange.endInclusive.toLong() - 1L)
-                                    onPreview(position, minOf(position + 2_000L, trimRange.endInclusive.toLong()))
-                                }
-                            },
-                    ) {
-                        val center = size.height / 2f
-                        peaks.forEachIndexed { index, peak ->
-                            val x = (index + .5f) * size.width / peaks.size
-                            val half = maxOf(1f, peak * center * .88f)
-                            drawLine(waveformColor, Offset(x, center - half), Offset(x, center + half), 1.5f)
-                        }
-                        previewPositionMs?.let {
-                            val fraction = ((it - trimRange.start) /
-                                (trimRange.endInclusive - trimRange.start)).coerceIn(0f, 1f)
-                            val x = fraction * size.width
-                            drawLine(playheadColor, Offset(x, 0f), Offset(x, size.height), 3f)
-                        }
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        TextButton(
-                            onClick = {
-                                val start = trimValue.start.toLong()
-                                onPreview(start, minOf(start + 2_000L, trimValue.endInclusive.toLong()))
-                            },
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-                        ) { Text("试听开头") }
-                        TextButton(
-                            onClick = {
-                                val end = trimValue.endInclusive.toLong()
-                                onPreview(maxOf(trimValue.start.toLong(), end - 2_000L), end)
-                            },
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-                        ) { Text("试听结尾") }
-                    }
-                }
-                if (trimValue.start > trimRange.start || trimValue.endInclusive < trimRange.endInclusive) {
-                    TextButton(
-                        onClick = {
-                            trimValue = trimRange
-                            onTrimChanged(trimRange.start.toLong(), trimRange.endInclusive.toLong())
-                        },
-                        modifier = Modifier.align(Alignment.End),
-                    ) { Text("恢复完整范围") }
-                }
-            }
-        }
-        if (boundaryRange != null && boundaryRange.endInclusive > boundaryRange.start) {
-            Column(Modifier.padding(start = 14.dp, end = 14.dp, bottom = 14.dp)) {
-                Text(
-                    "调整与下一书面的分界 · ${formatBoundary(boundaryValue.toLong())}",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = Ink.copy(alpha = 0.62f),
-                )
-                Text(
-                    "左边属于书面 ${spread.ordinal}，右边属于书面 ${spread.ordinal + 1}",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = Ink.copy(alpha = 0.48f),
-                )
-                Slider(
-                    value = boundaryValue.coerceIn(boundaryRange.start, boundaryRange.endInclusive),
-                    onValueChange = { boundaryValue = it },
-                    onValueChangeFinished = { onBoundaryChanged(boundaryValue.toLong()) },
-                    valueRange = boundaryRange,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
-        }
-        Row(
-            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 14.dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            onMoveUp?.let { TextButton(onClick = it) { Text("上移") } }
-            onMoveDown?.let { TextButton(onClick = it) { Text("下移") } }
-            onDelete?.let { TextButton(onClick = { confirmDelete = true }) { Text("删除") } }
-            onInsert?.let { TextButton(onClick = it) { Text("插入下一书面", maxLines = 1) } }
-        }
-        Row(
-            Modifier.fillMaxWidth().padding(start = 14.dp, end = 14.dp, bottom = 14.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            OutlinedButton(
-                onClick = onRerecord,
-                modifier = Modifier.weight(1f).height(52.dp),
-                shape = RoundedCornerShape(14.dp),
-            ) { Text("单独重录", maxLines = 1) }
-            onMergeNext?.let {
-                OutlinedButton(
-                    onClick = it,
-                    modifier = Modifier.weight(1f).height(52.dp),
-                    shape = RoundedCornerShape(14.dp),
-                ) { Text("合并下一书面", maxLines = 1) }
-            }
-        }
-    }
-    if (confirmDelete) AlertDialog(
-        onDismissRequest = { confirmDelete = false },
-        title = { Text("删除这个书面？") },
-        text = { Text("删除后需使用“撤销上一步”才能恢复。") },
-        confirmButton = { TextButton(onClick = { confirmDelete = false; onDelete?.invoke() }) { Text("确认删除") } },
-        dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("取消") } },
-    )
-}
-
-private data class WaveformCacheKey(val orderedSources: String)
-
-private fun waveformCacheKey(book: StoryBook, spread: StorySpread): WaveformCacheKey {
-    return WaveformCacheKey(spread.sourceSegments.joinToString("|") {
-        "${it.file.absolutePath}:${it.file.length()}:${it.file.lastModified()}:${it.startMs}:${it.endMs}"
-    })
-}
-
-private fun compositeWaveform(cache: PersistentWaveformCache, segments: List<com.read4me.app.model.NarrationSegment>, buckets: Int = 150): FloatArray {
+internal fun compositeWaveform(cache: PersistentWaveformCache, segments: List<com.read4me.app.model.NarrationSegment>, buckets: Int = 150): FloatArray {
     val total = NarrationTimeline.duration(segments)
     if (total <= 0L) return FloatArray(0)
     val counts = allocateWaveformBuckets(segments.map { it.durationMs }, buckets)
@@ -2584,7 +2068,7 @@ private fun compositeWaveform(cache: PersistentWaveformCache, segments: List<com
 }
 
 @Composable
-private fun StoryImage(file: File?, modifier: Modifier = Modifier) {
+internal fun StoryImage(file: File?, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val imageKey = file?.let { "${it.absolutePath}:${it.lastModified()}:${it.length()}" }
     var bitmap by remember(imageKey) {
@@ -2615,12 +2099,12 @@ private fun amplitudeLevel(value: Int): Float {
     return (ln(value.toFloat()) / ln(32767f)).coerceIn(0f, 1f)
 }
 
-private fun formatDuration(milliseconds: Long): String {
+internal fun formatDuration(milliseconds: Long): String {
     val totalSeconds = milliseconds.coerceAtLeast(0) / 1000
     return "%02d:%02d".format(totalSeconds / 60, totalSeconds % 60)
 }
 
-private fun formatBoundary(milliseconds: Long): String {
+internal fun formatBoundary(milliseconds: Long): String {
     val safe = milliseconds.coerceAtLeast(0)
     val totalSeconds = safe / 1000
     val millis = safe % 1000
@@ -2650,7 +2134,7 @@ private fun recognitionDiagnostic(decision: OrbPageMatcher.Decision): String {
     return "$bestText$secondText · $state · $search"
 }
 
-private fun qualityLabel(quality: PhotoQuality?): String = when (quality?.status) {
+internal fun qualityLabel(quality: PhotoQuality?): String = when (quality?.status) {
     null -> "尚未检查"
     PhotoQuality.Status.GOOD -> "质量良好"
     PhotoQuality.Status.UNAVAILABLE -> "无法检查"

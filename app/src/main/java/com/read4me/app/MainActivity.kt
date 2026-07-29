@@ -46,7 +46,16 @@ class MainActivity : ComponentActivity() {
         data object Setup : Destination
         data object ChildReading : Destination
         data class Recording(val book: StoryBook) : Destination
-        data class Review(val book: StoryBook, val initialUndo: StoryBook? = null, val undoImage: java.io.File? = null) : Destination
+        data class Review(
+            val book: StoryBook,
+            val initialUndo: StoryBook? = null,
+            val undoImage: java.io.File? = null,
+            val undoImages: List<java.io.File> = emptyList(),
+            val organizeDraft: StoryBook? = null,
+            val organizeSelected: String? = null,
+            val organizeCurrent: String? = null,
+            val organizeImages: List<java.io.File> = emptyList(),
+        ) : Destination
         data class AudioBook(val book: StoryBook, val returnToReview: Boolean) : Destination
         data class Rerecord(val book: StoryBook, val spreadId: String) : Destination
         data class Recapture(
@@ -63,7 +72,15 @@ class MainActivity : ComponentActivity() {
             val undoImage: java.io.File?,
             val returnToLibrary: Boolean,
         ) : Destination
-        data class InsertSpread(val book: StoryBook, val anchorSpreadId: String, val undo: StoryBook?, val undoImage: java.io.File?) : Destination
+        data class InsertSpread(
+            val baseBook: StoryBook,
+            val draftBook: StoryBook,
+            val anchorSpreadId: String,
+            val organizeSelected: String?,
+            val organizeImages: List<java.io.File>,
+            val editorUndo: StoryBook?,
+            val editorUndoImages: List<java.io.File>,
+        ) : Destination
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -304,8 +321,16 @@ class MainActivity : ComponentActivity() {
                                 permissionLauncher.launch(arrayOf(Manifest.permission.CAMERA))
                             }
                         },
-                        onInsert = { updatedBook, anchorSpreadId, undo, undoImage ->
-                            val target = Destination.InsertSpread(updatedBook, anchorSpreadId, undo, undoImage)
+                        onInsert = { baseBook, draftBook, anchorSpreadId, organizeSelected, organizeImages, editorUndo, editorUndoImages ->
+                            val target = Destination.InsertSpread(
+                                baseBook,
+                                draftBook,
+                                anchorSpreadId,
+                                organizeSelected,
+                                organizeImages,
+                                editorUndo,
+                                editorUndoImages,
+                            )
                             if (hasCameraPermission()) destination = target
                             else {
                                 permissionTarget = target
@@ -315,6 +340,11 @@ class MainActivity : ComponentActivity() {
                         onPlayBook = { destination = Destination.AudioBook(it, returnToReview = true) },
                         initialUndo = current.initialUndo,
                         initialUndoImage = current.undoImage,
+                        initialUndoImages = current.undoImages,
+                        initialOrganizeDraft = current.organizeDraft,
+                        initialOrganizeSelected = current.organizeSelected,
+                        initialOrganizeCurrent = current.organizeCurrent,
+                        initialOrganizeImages = current.organizeImages,
                         onBack = {
                             books = repository.loadAll()
                             destination = Destination.Library
@@ -377,13 +407,30 @@ class MainActivity : ComponentActivity() {
                     )
 
                     is Destination.InsertSpread -> InsertSpreadScreen(
-                        book = current.book,
+                        book = current.draftBook,
                         anchorSpreadId = current.anchorSpreadId,
                         repository = repository,
-                        onCancel = { destination = Destination.Review(current.book, current.undo, current.undoImage) },
+                        onCancel = {
+                            destination = Destination.Review(
+                                current.baseBook,
+                                initialUndo = current.editorUndo,
+                                undoImages = current.editorUndoImages,
+                                organizeDraft = current.draftBook,
+                                organizeSelected = current.organizeSelected,
+                                organizeCurrent = current.anchorSpreadId,
+                                organizeImages = current.organizeImages,
+                            )
+                        },
                         onFinished = { updated, previous, image ->
-                            books = repository.loadAll()
-                            destination = Destination.Review(updated, previous, image)
+                            destination = Destination.Review(
+                                current.baseBook,
+                                initialUndo = current.editorUndo,
+                                undoImages = current.editorUndoImages,
+                                organizeDraft = updated,
+                                organizeSelected = current.organizeSelected,
+                                organizeCurrent = current.anchorSpreadId,
+                                organizeImages = current.organizeImages + image,
+                            )
                         },
                     )
                 }

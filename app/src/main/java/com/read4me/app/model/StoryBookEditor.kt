@@ -50,13 +50,13 @@ object StoryBookEditor {
     /** [splitMs] is an aggregate source offset. Splits inside a physical segment are safe. */
     fun insertAfter(book: StoryBook, anchorId: String, splitMs: Long, newMarker: SpreadMarker): StoryBook {
         val i=index(book,anchorId); if(i<0||book.markers.any{it.spreadId==newMarker.spreadId})return book
-        val anchor=book.markers[i]; val segments=source(book,anchor); val total=NarrationTimeline.duration(segments)
+        val anchor=book.markers[i]; val segments=book.spreads[i].effectiveSegments; val total=NarrationTimeline.duration(segments)
         if(splitMs<MIN_MS||splitMs>total-MIN_MS)return book
         val left=NarrationTimeline.clip(segments,0,splitMs); val right=NarrationTimeline.clip(segments,splitMs,total)
         val out=book.markers.toMutableList(); out[i]=anchor.copy(segments=left,trimStartMs=null,trimEndMs=null,overrideAudioFile=null,overrideDurationMs=null)
         out.add(i+1,newMarker.copy(segments=right,trimStartMs=null,trimEndMs=null,overrideAudioFile=null,overrideDurationMs=null)); return book.copy(markers=out)
     }
-    fun mergeWithNext(book: StoryBook, spreadId: String): StoryBook { val i=index(book,spreadId); if(i !in 0 until book.markers.lastIndex)return book; val out=book.markers.toMutableList(); val a=out[i]; val b=out[i+1]; out[i]=a.copy(segments=source(book,a)+source(book,b),trimStartMs=null,trimEndMs=null,overrideAudioFile=null,overrideDurationMs=null); out.removeAt(i+1); return book.copy(markers=out, resumeSpreadId=if(book.resumeSpreadId==b.spreadId)a.spreadId else book.resumeSpreadId) }
+    fun mergeWithNext(book: StoryBook, spreadId: String): StoryBook { val i=index(book,spreadId); if(i !in 0 until book.markers.lastIndex)return book; val out=book.markers.toMutableList(); val a=out[i]; val b=out[i+1]; out[i]=a.copy(segments=book.spreads[i].effectiveSegments+book.spreads[i+1].effectiveSegments,trimStartMs=null,trimEndMs=null,overrideAudioFile=null,overrideDurationMs=null); out.removeAt(i+1); return book.copy(markers=out, resumeSpreadId=if(book.resumeSpreadId==b.spreadId)a.spreadId else book.resumeSpreadId) }
     fun replaceNarration(book: StoryBook, spreadId: String, audioFile: File, durationMs: Long) = if(durationMs<=0)book else update(book,spreadId){it.copy(segments=listOf(NarrationSegment(audioFile,0,durationMs)),trimStartMs=null,trimEndMs=null,overrideAudioFile=null,overrideDurationMs=null)}
     private fun update(book:StoryBook,id:String,transform:(SpreadMarker)->SpreadMarker):StoryBook{val i=index(book,id);if(i<0)return book;val out=book.markers.toMutableList();out[i]=transform(out[i]);return book.copy(markers=out)}
 }
