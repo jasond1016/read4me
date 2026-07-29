@@ -33,6 +33,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -79,6 +80,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
@@ -2105,12 +2107,44 @@ fun ReviewScreen(
         editableBook = editSession.apply(StoryBookEditor.mergeWithNext(editableBook, spreadId), repository::save)
     }
 
+    fun returnToLibrary() {
+        player.stop()
+        playingSpreadId = null
+        previewPositionMs = null
+        onBack()
+    }
+
+    BackHandler(onBack = ::returnToLibrary)
+
     Surface(Modifier.fillMaxSize(), color = Paper) {
-        LazyColumn(
-            contentPadding = PaddingValues(horizontal = 20.dp, vertical = 28.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
-        ) {
-            item {
+        Column(Modifier.fillMaxSize()) {
+            Surface(
+                color = Color.White,
+                shadowElevation = 4.dp,
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().statusBarsPadding().height(64.dp).padding(horizontal = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    TextButton(onClick = ::returnToLibrary) {
+                        Text("← 返回书架", color = Moss, fontWeight = FontWeight.Bold)
+                    }
+                    Text(
+                        editableBook.title,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = Ink,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
+                    )
+                }
+            }
+            LazyColumn(
+                modifier = Modifier.weight(1f),
+                contentPadding = PaddingValues(horizontal = 20.dp, vertical = 28.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                item {
                 Text("陪读已经留下来了", style = MaterialTheme.typography.headlineLarge)
                 Text(
                     editableBook.title,
@@ -2219,19 +2253,14 @@ fun ReviewScreen(
                     },
                 )
             }
-            item {
-                Button(
-                    onClick = onBack,
-                    modifier = Modifier.fillMaxWidth().height(56.dp),
-                    shape = RoundedCornerShape(18.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = Moss),
-                ) { Text("回到家庭书架") }
-                Text(
-                    "修剪只改变播放范围，不会删除原始录音；随时可以重新调整。",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = Ink.copy(alpha = 0.5f),
-                    modifier = Modifier.padding(top = 12.dp, bottom = 30.dp),
-                )
+                item {
+                    Text(
+                        "修剪只改变播放范围，不会删除原始录音；随时可以重新调整。",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Ink.copy(alpha = 0.5f),
+                        modifier = Modifier.padding(bottom = 30.dp),
+                    )
+                }
             }
         }
     }
