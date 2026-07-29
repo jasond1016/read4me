@@ -12,8 +12,8 @@ android {
         applicationId = "com.read4me.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 21
-        versionName = "2.0.0"
+        versionCode = 22
+        versionName = "2.1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -44,6 +44,9 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
+    val media3 = "1.6.1"
+    implementation("androidx.media3:media3-exoplayer:$media3")
+    implementation("androidx.media3:media3-session:$media3")
 
     val cameraX = "1.4.1"
     implementation("androidx.camera:camera-camera2:$cameraX")

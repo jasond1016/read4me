@@ -29,6 +29,7 @@ import com.read4me.app.ui.ReviewScreen
 import com.read4me.app.ui.SetupScreen
 import com.read4me.app.ui.StoryImageLoader
 import com.read4me.app.ui.ChildReadingScreen
+import com.read4me.app.ui.AudioBookPlayerScreen
 import com.read4me.app.vision.RecognitionHistoryStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -46,6 +47,7 @@ class MainActivity : ComponentActivity() {
         data object ChildReading : Destination
         data class Recording(val book: StoryBook) : Destination
         data class Review(val book: StoryBook, val initialUndo: StoryBook? = null, val undoImage: java.io.File? = null) : Destination
+        data class AudioBook(val book: StoryBook, val returnToReview: Boolean) : Destination
         data class Rerecord(val book: StoryBook, val spreadId: String) : Destination
         data class Recapture(
             val book: StoryBook,
@@ -171,6 +173,7 @@ class MainActivity : ComponentActivity() {
                             }
                         },
                         onOpenBook = { destination = Destination.Review(it) },
+                        onPlayBook = { destination = Destination.AudioBook(it, returnToReview = false) },
                         onContinueBook = { book ->
                             val target = Destination.Recording(book)
                             if (hasCapturePermissions()) destination = target else {
@@ -309,11 +312,19 @@ class MainActivity : ComponentActivity() {
                                 permissionLauncher.launch(arrayOf(Manifest.permission.CAMERA))
                             }
                         },
+                        onPlayBook = { destination = Destination.AudioBook(it, returnToReview = true) },
                         initialUndo = current.initialUndo,
                         initialUndoImage = current.undoImage,
                         onBack = {
                             books = repository.loadAll()
                             destination = Destination.Library
+                        },
+                    )
+
+                    is Destination.AudioBook -> AudioBookPlayerScreen(
+                        book = current.book,
+                        onBack = {
+                            destination = if (current.returnToReview) Destination.Review(current.book) else Destination.Library
                         },
                     )
 

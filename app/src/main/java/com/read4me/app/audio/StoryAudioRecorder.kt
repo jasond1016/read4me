@@ -1,6 +1,7 @@
 package com.read4me.app.audio
 
 import android.content.Context
+import android.content.Intent
 import android.media.MediaRecorder
 import android.os.Build
 import android.os.SystemClock
@@ -20,6 +21,8 @@ class StoryAudioRecorder(private val context: Context) {
 
     fun start(outputFile: File) {
         check(recorder == null) { "Recorder is already running" }
+        // Never let a background story leak through the speaker into a new parent recording.
+        context.stopService(Intent(context, AudioBookPlaybackService::class.java))
         outputFile.parentFile?.mkdirs()
         val nextRecorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             MediaRecorder(context)

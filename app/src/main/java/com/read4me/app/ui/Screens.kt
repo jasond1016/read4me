@@ -1,6 +1,7 @@
 package com.read4me.app.ui
 
 import android.app.Activity
+import android.content.Intent
 import android.view.WindowManager
 import androidx.activity.compose.BackHandler
 import androidx.camera.core.CameraSelector
@@ -92,6 +93,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.read4me.app.RecordingRecoveryViewModel
 import com.read4me.app.audio.AudioSegmentPlayer
+import com.read4me.app.audio.AudioBookPlaybackService
 import com.read4me.app.audio.PersistentWaveformCache
 import com.read4me.app.audio.StoryAudioRecorder
 import com.read4me.app.audio.WaveformMath
@@ -142,6 +144,7 @@ fun LibraryScreen(
     onCreateBook: () -> Unit,
     onChildMode: () -> Unit,
     onOpenBook: (StoryBook) -> Unit,
+    onPlayBook: (StoryBook) -> Unit,
     onContinueBook: (StoryBook) -> Unit,
     archiveMessage: String?,
     onImport: () -> Unit,
@@ -269,6 +272,7 @@ fun LibraryScreen(
                         onRename = { onRename(book, it) },
                         onMoveToTrash = { onMoveToTrash(book) },
                         onContinue = { onContinueBook(book) },
+                        onPlay = { onPlayBook(book) },
                     )
                 }
             }
@@ -338,6 +342,7 @@ private fun BookCard(
     onRename: (String) -> Unit,
     onMoveToTrash: () -> Unit,
     onContinue: () -> Unit,
+    onPlay: () -> Unit,
 ) {
     var showRename by remember { mutableStateOf(false) }
     var showDelete by remember { mutableStateOf(false) }
@@ -363,6 +368,10 @@ private fun BookCard(
                 )
                 if (book.status == StoryStatus.IN_PROGRESS) {
                     Button(onClick = onContinue, colors = ButtonDefaults.buttonColors(containerColor = Moss)) { Text("继续录制") }
+                }
+                if (book.status == StoryStatus.COMPLETE && book.spreads.any { it.effectiveSegments.isNotEmpty() } &&
+                    book.spreads.flatMap { it.effectiveSegments }.all { it.file.isFile }) {
+                    Button(onClick = onPlay, colors = ButtonDefaults.buttonColors(containerColor = Coral)) { Text("▶ 整本播放") }
                 }
                 TextButton(onClick = onExport, contentPadding = PaddingValues(0.dp)) {
                     Text("导出备份", style = MaterialTheme.typography.labelMedium)
@@ -1074,6 +1083,10 @@ fun ChildReadingScreen(
     var playbackProgress by remember { mutableFloatStateOf(0f) }
 
     KeepScreenOn()
+
+    LaunchedEffect(Unit) {
+        context.stopService(Intent(context, AudioBookPlaybackService::class.java))
+    }
 
     DisposableEffect(context) {
         val window = (context as? Activity)?.window
@@ -2055,6 +2068,7 @@ fun ReviewScreen(
     onRerecord: (StoryBook, String) -> Unit,
     onRecapture: (StoryBook, String, StoryBook?, File?) -> Unit,
     onInsert: (StoryBook, String, StoryBook?, File?) -> Unit,
+    onPlayBook: (StoryBook) -> Unit,
     initialUndo: StoryBook? = null,
     initialUndoImage: File? = null,
     onBack: () -> Unit,
@@ -2137,6 +2151,12 @@ fun ReviewScreen(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
                     )
+                    if (editableBook.status == StoryStatus.COMPLETE && editableBook.spreads.any { it.effectiveSegments.isNotEmpty() } &&
+                        editableBook.spreads.flatMap { it.effectiveSegments }.all { it.file.isFile }) {
+                        TextButton(onClick = { player.stop(); onPlayBook(editableBook) }) {
+                            Text("整本播放", color = Coral, fontWeight = FontWeight.Bold)
+                        }
+                    }
                 }
             }
             LazyColumn(
