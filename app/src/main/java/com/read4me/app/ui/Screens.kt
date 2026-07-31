@@ -79,7 +79,9 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -696,6 +698,7 @@ fun RecordingScreen(
     onFinished: (StoryBook) -> Unit,
 ) {
     val context = LocalContext.current
+    val haptic = LocalHapticFeedback.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val mainExecutor = remember { ContextCompat.getMainExecutor(context) }
     val analysisExecutor = remember(mode) {
@@ -1006,7 +1009,11 @@ fun RecordingScreen(
                             OutlinedButton(
                                 enabled = pendingCaptures.isEmpty(),
                                 onClick = {
+                                    val markerCount = markers.size
                                     captureMarker(if (initialCaptureReady) MarkerSource.MANUAL else MarkerSource.INITIAL)
+                                    if (mode == RecordingMode.MANUAL && markers.size > markerCount) {
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    }
                                 },
                                 modifier = Modifier.weight(1f).height(54.dp),
                                 shape = RoundedCornerShape(17.dp),
@@ -1019,6 +1026,21 @@ fun RecordingScreen(
                                 shape = RoundedCornerShape(17.dp),
                                 colors = ButtonDefaults.buttonColors(containerColor = Moss),
                             ) { Text("整本录完") }
+                        }
+                        val canUndoManualPage =
+                            mode == RecordingMode.MANUAL && sessionBoundaries.size > 1 &&
+                                sessionMarkerIds.lastOrNull() == sessionBoundaries.lastOrNull()?.spreadId
+                        if (canUndoManualPage) {
+                            TextButton(
+                                onClick = {
+                                    val removedId = sessionMarkerIds.removeAt(sessionMarkerIds.lastIndex)
+                                    sessionBoundaries.removeAll { it.spreadId == removedId }
+                                    markers.removeAll { it.spreadId == removedId }
+                                    captureMessage = "已撤销上一次翻页 · 当前仍是书面 ${markers.size}"
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) { Text("撤销上一次翻页") }
                         }
                         OutlinedButton(enabled = pendingCaptures.isEmpty(), onClick = { finalizeSession() }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) { Text("临时暂停") }
                     } else if (phase == RecordingPhase.SAVE_FAILED) {
@@ -1592,6 +1614,8 @@ fun RecaptureScreen(
     book: StoryBook,
     spreadId: String,
     repository: StoryRepository,
+    progressLabel: String? = null,
+    onSkip: (() -> Unit)? = null,
     onCancel: () -> Unit,
     onFinished: (StoryBook, StoryBook, File) -> Unit,
 ) {
@@ -1656,7 +1680,11 @@ fun RecaptureScreen(
                     Modifier.padding(24.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
-                    Text("添加书面 $ordinal 的参考照片", style = MaterialTheme.typography.headlineLarge)
+                    Text(
+                        if (progressLabel == null) "添加书面 $ordinal 的参考照片"
+                        else "批量补拍 $progressLabel · 书面 $ordinal",
+                        style = MaterialTheme.typography.headlineLarge,
+                    )
                     Text(message, modifier = Modifier.padding(top = 8.dp, bottom = 18.dp))
                     Button(
                         enabled = !isCapturing,
@@ -1713,6 +1741,9 @@ fun RecaptureScreen(
                         modifier = Modifier.fillMaxWidth().height(56.dp),
                         shape = RoundedCornerShape(18.dp),
                     ) { Text(if (isCapturing) "分析并保存中" else "拍下并添加") }
+                    if (onSkip != null) {
+                        TextButton(enabled = !isCapturing, onClick = onSkip) { Text("跳过这个书面") }
+                    }
                     TextButton(enabled = !isCapturing, onClick = onCancel) { Text("取消") }
                 }
             }

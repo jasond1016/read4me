@@ -77,6 +77,7 @@ fun ReviewScreen(
     repository: StoryRepository,
     onRerecord: (StoryBook, String) -> Unit,
     onRecapture: (StoryBook, String, StoryBook?, File?) -> Unit,
+    onBatchRecapture: (StoryBook, List<String>) -> Unit,
     onInsert: (StoryBook, StoryBook, String, String?, List<File>, StoryBook?, List<File>) -> Unit,
     onPlayBook: (StoryBook) -> Unit,
     initialUndo: StoryBook? = null,
@@ -184,6 +185,13 @@ fun ReviewScreen(
                 onPlayBook = {
                     stop()
                     onPlayBook(current)
+                },
+                batchRecapture = {
+                    stop()
+                    onBatchRecapture(
+                        current,
+                        current.markers.filter { it.references.isEmpty() }.map { it.spreadId },
+                    )
                 },
                 undo = {
                     stop()
@@ -350,6 +358,7 @@ private fun ReviewTopBar(
     canUndo: Boolean,
     back: () -> Unit,
     onPlayBook: () -> Unit,
+    batchRecapture: () -> Unit,
     undo: () -> Unit,
     organize: () -> Unit,
     cancel: () -> Unit,
@@ -402,6 +411,15 @@ private fun ReviewTopBar(
                                 onClick = {
                                     menuExpanded = false
                                     undo()
+                                },
+                            )
+                        val missingPhotos = book.markers.count { it.references.isEmpty() }
+                        if (missingPhotos > 0)
+                            DropdownMenuItem(
+                                text = { Text("批量补拍书面照片（$missingPhotos）") },
+                                onClick = {
+                                    menuExpanded = false
+                                    batchRecapture()
                                 },
                             )
                         DropdownMenuItem(

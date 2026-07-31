@@ -8,6 +8,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -66,6 +67,12 @@ class MainActivity : ComponentActivity() {
             val undo: StoryBook?,
             val undoImage: java.io.File?,
             val returnToLibrary: Boolean = false,
+        ) : Destination
+        data class BatchRecapture(
+            val book: StoryBook,
+            val remainingSpreadIds: List<String>,
+            val completed: Int,
+            val total: Int,
         ) : Destination
         data class VerifyReference(
             val book: StoryBook,
@@ -353,6 +360,19 @@ class MainActivity : ComponentActivity() {
                                 permissionLauncher.launch(arrayOf(Manifest.permission.CAMERA))
                             }
                         },
+                        onBatchRecapture = { updatedBook, missingSpreadIds ->
+                            val target = Destination.BatchRecapture(
+                                updatedBook,
+                                missingSpreadIds,
+                                completed = 0,
+                                total = missingSpreadIds.size,
+                            )
+                            if (hasCameraPermission()) destination = target
+                            else {
+                                permissionTarget = target
+                                permissionLauncher.launch(arrayOf(Manifest.permission.CAMERA))
+                            }
+                        },
                         onInsert = { baseBook, draftBook, anchorSpreadId, organizeSelected, organizeImages, editorUndo, editorUndoImages ->
                             val target = Destination.InsertSpread(
                                 baseBook,
@@ -417,6 +437,47 @@ class MainActivity : ComponentActivity() {
                             )
                         },
                     )
+
+                    is Destination.BatchRecapture -> {
+                        val spreadId = current.remainingSpreadIds.firstOrNull()
+                        if (spreadId == null) {
+                            destination = Destination.Review(current.book)
+                        } else {
+                            key(current.book.id, spreadId) {
+                                RecaptureScreen(
+                                    book = current.book,
+                                    spreadId = spreadId,
+                                    repository = repository,
+                                    progressLabel = "${current.completed + 1}/${current.total}",
+                                    onSkip = {
+                                        val remaining = current.remainingSpreadIds.drop(1)
+                                        destination = if (remaining.isEmpty()) Destination.Review(current.book)
+                                        else current.copy(
+                                            remainingSpreadIds = remaining,
+                                            completed = current.completed + 1,
+                                        )
+                                    },
+                                    onCancel = {
+                                        books = repository.loadAll()
+                                        destination = Destination.Review(current.book)
+                                    },
+                                    onFinished = { updated, _, _ ->
+                                        books = repository.loadAll()
+                                        val remaining = current.remainingSpreadIds.drop(1)
+                                        destination = if (remaining.isEmpty()) {
+                                            Destination.VerifyReference(updated, spreadId, null, null, false)
+                                        } else {
+                                            current.copy(
+                                                book = updated,
+                                                remainingSpreadIds = remaining,
+                                                completed = current.completed + 1,
+                                            )
+                                        }
+                                    },
+                                )
+                            }
+                        }
+                    }
 
                     is Destination.VerifyReference -> ReferenceVerificationScreen(
                         book = current.book,
