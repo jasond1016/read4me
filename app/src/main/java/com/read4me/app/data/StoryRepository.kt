@@ -6,6 +6,7 @@ import com.read4me.app.audio.audioDurationMs
 import com.read4me.app.model.MarkerSource
 import com.read4me.app.model.NarrationSegment
 import com.read4me.app.model.PhotoQuality
+import com.read4me.app.model.RecordingMode
 import com.read4me.app.model.SpreadMarker
 import com.read4me.app.model.SpreadReference
 import com.read4me.app.model.StoryBook
@@ -29,15 +30,23 @@ class StoryRepository(context: Context) {
 
     data class TrashedBook(val book: StoryBook, val deletedAtMs: Long)
 
-    fun createDraft(title: String): StoryBook {
+    fun createDraft(title: String, recordingMode: RecordingMode = RecordingMode.CAMERA): StoryBook {
         val id = UUID.randomUUID().toString()
         val directory = File(booksDirectory, id).apply {
             mkdirs()
             File(this, "spreads").mkdirs()
             File(this, "recordings").mkdirs()
         }
-        return StoryBook(id, title.ifBlank { "我们的故事" }, directory, File(directory, "legacy.m4a"), 0L,
-            emptyList(), StoryStatus.IN_PROGRESS).also(::save)
+        return StoryBook(
+            id,
+            title.ifBlank { "我们的故事" },
+            directory,
+            File(directory, "legacy.m4a"),
+            0L,
+            emptyList(),
+            StoryStatus.IN_PROGRESS,
+            recordingMode = recordingMode,
+        ).also(::save)
     }
 
     fun imageFile(book: StoryBook, spreadId: String): File =
@@ -80,6 +89,7 @@ class StoryRepository(context: Context) {
             put("id", book.id)
             put("title", book.title)
             put("status", book.status.name)
+            put("recordingMode", book.recordingMode.name)
             put("resumeSpreadId", book.resumeSpreadId ?: JSONObject.NULL)
             put("markers", markers)
         }
@@ -235,10 +245,10 @@ class StoryRepository(context: Context) {
         }
         if (book.status == StoryStatus.COMPLETE) {
             require(book.markers.isNotEmpty()) { "Complete book has no playable spreads" }
-            require(book.markers.all { it.references.isNotEmpty() && it.segments.isNotEmpty() }) { "A complete spread is incomplete" }
+            require(book.markers.all { it.segments.isNotEmpty() }) { "A complete spread has no narration" }
         } else {
-            require(book.markers.all { it.references.isNotEmpty() && it.segments.isNotEmpty() }) {
-                "A published draft spread is incomplete"
+            require(book.markers.all { it.segments.isNotEmpty() }) {
+                "A published draft spread has no narration"
             }
         }
         require(book.markers.map(SpreadMarker::spreadId).distinct().size == book.markers.size) {
@@ -429,6 +439,11 @@ class StoryRepository(context: Context) {
             status = if (version >= 7) StoryStatus.valueOf(json.getString("status")) else StoryStatus.COMPLETE,
             resumeSpreadId = if (version >= 7) json.optString("resumeSpreadId").takeIf { it.isNotBlank() && it != "null" }
                 else markers.lastOrNull()?.spreadId,
+            recordingMode = json.optString("recordingMode")
+                .takeIf { it.isNotBlank() }
+                ?.let(RecordingMode::valueOf)
+                ?: if (markers.isNotEmpty() && markers.all { it.references.isEmpty() }) RecordingMode.MANUAL
+                else RecordingMode.CAMERA,
         )
     }.getOrNull()
 

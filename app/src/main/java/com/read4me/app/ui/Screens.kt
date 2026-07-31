@@ -32,6 +32,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -40,6 +41,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -104,6 +106,7 @@ import com.read4me.app.model.PendingMarker
 import com.read4me.app.model.SpreadMarker
 import com.read4me.app.model.SpreadReference
 import com.read4me.app.model.PhotoQuality
+import com.read4me.app.model.RecordingMode
 import com.read4me.app.model.StoryBook
 import com.read4me.app.model.StoryBookEditor
 import com.read4me.app.model.StorySpread
@@ -437,13 +440,17 @@ private fun TrashBookCard(
 fun SetupScreen(
     message: String?,
     onBack: () -> Unit,
-    onStart: (String) -> Unit,
+    onStart: (String, RecordingMode) -> Unit,
 ) {
     var title by remember {
         mutableStateOf("我们的故事 · ${SimpleDateFormat("M月d日", Locale.CHINA).format(Date())}")
     }
     Surface(Modifier.fillMaxSize(), color = Paper) {
-        Column(Modifier.padding(horizontal = 24.dp, vertical = 28.dp)) {
+        Column(
+            Modifier.verticalScroll(rememberScrollState())
+                .navigationBarsPadding()
+                .padding(horizontal = 24.dp, vertical = 28.dp),
+        ) {
             TextButton(
                 onClick = onBack,
                 contentPadding = PaddingValues(0.dp),
@@ -464,7 +471,7 @@ fun SetupScreen(
                 onValueChange = { title = it },
                 label = { Text("这次故事的名字") },
                 singleLine = true,
-                keyboardActions = KeyboardActions(onDone = { onStart(title) }),
+                keyboardActions = KeyboardActions(),
                 keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = ImeAction.Done),
                 shape = RoundedCornerShape(16.dp),
                 modifier = Modifier.fillMaxWidth().padding(top = 28.dp),
@@ -474,18 +481,31 @@ fun SetupScreen(
             PreparationNote("请勿打扰", "避免来电和通知打断珍贵的录音")
             PreparationNote("两侧光线", "减少铜版纸反光和设备阴影")
 
-            Spacer(Modifier.weight(1f))
+            Spacer(Modifier.height(28.dp))
             if (message != null) {
                 Text(message, color = Coral, style = MaterialTheme.typography.bodyMedium)
                 Spacer(Modifier.height(12.dp))
             }
             Button(
-                onClick = { onStart(title) },
+                onClick = { onStart(title, RecordingMode.CAMERA) },
                 modifier = Modifier.fillMaxWidth().height(58.dp),
                 shape = RoundedCornerShape(18.dp),
             ) {
                 Text("打开摄像头")
             }
+            OutlinedButton(
+                onClick = { onStart(title, RecordingMode.MANUAL) },
+                modifier = Modifier.fillMaxWidth().padding(top = 10.dp).height(58.dp),
+                shape = RoundedCornerShape(18.dp),
+            ) {
+                Text("不开摄像头 · 手动翻页")
+            }
+            Text(
+                "只录声音，由你按键标记每次翻页；书面照片可以录完后再补拍。",
+                style = MaterialTheme.typography.bodySmall,
+                color = Ink.copy(alpha = 0.62f),
+                modifier = Modifier.padding(top = 8.dp),
+            )
             OutlinedButton(
                 onClick = onBack,
                 modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
@@ -669,6 +689,7 @@ private fun ChildReadingStatus(
 @Composable
 fun RecordingScreen(
     book: StoryBook,
+    mode: RecordingMode,
     repository: StoryRepository,
     recovery: RecordingRecoveryViewModel,
     onCancel: () -> Unit,
@@ -677,12 +698,14 @@ fun RecordingScreen(
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val mainExecutor = remember { ContextCompat.getMainExecutor(context) }
-    val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
-    val controller = remember {
-        LifecycleCameraController(context).apply {
+    val analysisExecutor = remember(mode) {
+        if (mode == RecordingMode.CAMERA) Executors.newSingleThreadExecutor() else null
+    }
+    val controller = remember(mode) {
+        if (mode == RecordingMode.CAMERA) LifecycleCameraController(context).apply {
             cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
             setEnabledUseCases(CameraController.IMAGE_CAPTURE or CameraController.IMAGE_ANALYSIS)
-        }
+        } else null
     }
     val detector = remember { PageTurnDetector() }
     val recorder = remember { StoryAudioRecorder(context) }
@@ -695,7 +718,9 @@ fun RecordingScreen(
         )
     }
     val isRecording = phase == RecordingPhase.RECORDING
-    var initialCaptureReady by remember { mutableStateOf(markers.lastOrNull()?.references?.firstOrNull()?.file?.isFile == true) }
+    var initialCaptureReady by remember {
+        mutableStateOf(markers.isNotEmpty() && (mode == RecordingMode.MANUAL || markers.last().references.firstOrNull()?.file?.isFile == true))
+    }
     var sessionFile by remember { mutableStateOf<File?>(null) }
     val sessionBoundaries = remember { mutableStateListOf<SessionBoundary>() }
     val sessionMarkerIds = remember { mutableStateListOf<String>() }
@@ -707,7 +732,9 @@ fun RecordingScreen(
     var amplitude by remember { mutableFloatStateOf(0f) }
     var captureMessage by remember(book.id) {
         mutableStateOf(
-            if (phase == RecordingPhase.SAVE_FAILED) "上次保存未完成，请重试" else "把完整书面放进取景框",
+            if (phase == RecordingPhase.SAVE_FAILED) "上次保存未完成，请重试"
+            else if (mode == RecordingMode.MANUAL) "手动模式：翻页后请按“下一书面”"
+            else "把完整书面放进取景框",
         )
     }
     var latestFingerprint by remember { mutableStateOf<ByteArray?>(null) }
@@ -779,8 +806,8 @@ fun RecordingScreen(
         if (phase == RecordingPhase.RECORDING && !finalizeSession()) return
         if (phase != RecordingPhase.PAUSED) return
         if (draft.markers.isNotEmpty() && draft.markers.all { marker ->
-                marker.references.isNotEmpty() && marker.references.all { it.file.isFile } &&
-                    marker.segments.isNotEmpty() && marker.segments.all { it.file.isFile }
+                marker.references.all { it.file.isFile } && marker.segments.isNotEmpty() &&
+                    marker.segments.all { it.file.isFile }
             }) {
             persistCandidate(
                 draft.copy(status = StoryStatus.COMPLETE, resumeSpreadId = draft.markers.last().spreadId),
@@ -798,6 +825,28 @@ fun RecordingScreen(
         }
         val spreadId = UUID.randomUUID().toString()
         val token = sessionToken
+        if (mode == RecordingMode.MANUAL) {
+            markers += SpreadMarker(
+                timestampMs = timestamp,
+                source = source,
+                references = emptyList(),
+                spreadId = spreadId,
+            )
+            val published = publishPendingMarker(
+                sessionBoundaries,
+                PendingMarker(token, spreadId, timestamp),
+                sessionToken,
+            )
+            sessionBoundaries.clear(); sessionBoundaries.addAll(published)
+            sessionMarkerIds += spreadId
+            initialCaptureReady = true
+            captureMessage = if (source == MarkerSource.INITIAL) {
+                "已开始第 1 个书面"
+            } else {
+                "已进入书面 ${markers.size}"
+            }
+            return
+        }
         val imageFile = repository.imageFile(draft, spreadId)
         val captureFile = File(imageFile.parentFile, ".$spreadId-$token.pending.jpg")
         pendingImage = captureFile
@@ -808,7 +857,7 @@ fun RecordingScreen(
             spreadId = spreadId,
         )
         pendingCaptures += spreadId
-        controller.takePicture(
+        requireNotNull(controller).takePicture(
             ImageCapture.OutputFileOptions.Builder(captureFile).build(),
             mainExecutor,
             object : ImageCapture.OnImageSavedCallback {
@@ -850,19 +899,21 @@ fun RecordingScreen(
     }
 
     DisposableEffect(controller, lifecycleOwner) {
-        controller.bindToLifecycle(lifecycleOwner)
-        val analyzer = CameraFrameAnalyzer(detector) { result, luma, _ ->
-            val fingerprint = VisualFingerprint.fromLuma(luma)
-            mainExecutor.execute {
-                latestFingerprint = fingerprint
-                motionScore = result.motionScore
-                isMoving = result.isMoving
-                if (result.pageTurned && phase == RecordingPhase.RECORDING && initialCaptureReady) {
-                    captureMarker(MarkerSource.AUTOMATIC)
+        if (controller != null && analysisExecutor != null) {
+            controller.bindToLifecycle(lifecycleOwner)
+            val analyzer = CameraFrameAnalyzer(detector) { result, luma, _ ->
+                val fingerprint = VisualFingerprint.fromLuma(luma)
+                mainExecutor.execute {
+                    latestFingerprint = fingerprint
+                    motionScore = result.motionScore
+                    isMoving = result.isMoving
+                    if (result.pageTurned && phase == RecordingPhase.RECORDING && initialCaptureReady) {
+                        captureMarker(MarkerSource.AUTOMATIC)
+                    }
                 }
             }
+            controller.setImageAnalysisAnalyzer(analysisExecutor, analyzer)
         }
-        controller.setImageAnalysisAnalyzer(analysisExecutor, analyzer)
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_PAUSE) currentFinalize()
         }
@@ -870,9 +921,9 @@ fun RecordingScreen(
         onDispose {
             currentFinalize()
             lifecycleOwner.lifecycle.removeObserver(observer)
-            controller.clearImageAnalysisAnalyzer()
-            controller.unbind()
-            analysisExecutor.shutdown()
+            controller?.clearImageAnalysisAnalyzer()
+            controller?.unbind()
+            analysisExecutor?.shutdown()
             recorder.release()
         }
     }
@@ -895,19 +946,27 @@ fun RecordingScreen(
     Surface(Modifier.fillMaxSize(), color = Ink) {
         Column(Modifier.fillMaxSize()) {
             Box(Modifier.fillMaxWidth().aspectRatio(1.32f)) {
-                AndroidView(
-                    factory = { viewContext ->
-                        PreviewView(viewContext).apply {
-                            scaleType = PreviewView.ScaleType.FILL_CENTER
-                            this.controller = controller
-                        }
-                    },
-                    modifier = Modifier.fillMaxSize(),
-                )
-                BookGuideFrame(
-                    active = isMoving,
-                    modifier = Modifier.align(Alignment.Center),
-                )
+                if (controller != null) {
+                    AndroidView(
+                        factory = { viewContext ->
+                            PreviewView(viewContext).apply {
+                                scaleType = PreviewView.ScaleType.FILL_CENTER
+                                this.controller = controller
+                            }
+                        },
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                    BookGuideFrame(active = isMoving, modifier = Modifier.align(Alignment.Center))
+                } else {
+                    Column(
+                        Modifier.fillMaxSize().background(Moss.copy(alpha = 0.24f)).padding(28.dp),
+                        verticalArrangement = Arrangement.Center,
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Text("手动翻页录制", color = Color.White, style = MaterialTheme.typography.headlineLarge)
+                        Text("镜头不会开启", color = Color.White.copy(alpha = 0.72f), modifier = Modifier.padding(top = 8.dp))
+                    }
+                }
                 Surface(
                     color = Ink.copy(alpha = 0.82f),
                     shape = RoundedCornerShape(20.dp),
@@ -925,7 +984,11 @@ fun RecordingScreen(
                 Column(Modifier.padding(22.dp)) {
                     Text(captureMessage, style = MaterialTheme.typography.titleLarge)
                     Text(
-                        if (isMoving) "检测到翻页动作，等待画面稳定……" else if (isRecording) "正常讲故事；需要时可手动补一个标记。" else "确认书本完整清晰，再开始录音。",
+                        if (mode == RecordingMode.MANUAL && isRecording) "读完当前书面并翻页后，按“下一书面”。"
+                        else if (mode == RecordingMode.MANUAL) "开始后会自动建立第一个书面。"
+                        else if (isMoving) "检测到翻页动作，等待画面稳定……"
+                        else if (isRecording) "正常讲故事；需要时可手动补一个标记。"
+                        else "确认书本完整清晰，再开始录音。",
                         style = MaterialTheme.typography.bodyMedium,
                         color = Ink.copy(alpha = 0.65f),
                         modifier = Modifier.padding(top = 5.dp),
@@ -947,7 +1010,7 @@ fun RecordingScreen(
                                 },
                                 modifier = Modifier.weight(1f).height(54.dp),
                                 shape = RoundedCornerShape(17.dp),
-                            ) { Text(if (initialCaptureReady) "标记翻页" else "重试首张书面") }
+                            ) { Text(if (mode == RecordingMode.MANUAL) "下一书面" else if (initialCaptureReady) "标记翻页" else "重试首张书面") }
                             Button(
                                 enabled = initialCaptureReady && pendingCaptures.isEmpty() &&
                                     elapsedMs >= 800L,
@@ -993,7 +1056,7 @@ fun RecordingScreen(
                                     captureMessage = "继续当前书面"
                                 }
                             },
-                            enabled = latestFingerprint != null,
+                            enabled = mode == RecordingMode.MANUAL || latestFingerprint != null,
                             modifier = Modifier.fillMaxWidth().padding(top = 18.dp).height(58.dp),
                             shape = RoundedCornerShape(18.dp),
                         ) { Text(if (markers.isEmpty()) "● 开始陪读" else "继续当前书面") }
@@ -1010,7 +1073,8 @@ fun RecordingScreen(
                         ) { Text(if (markers.isEmpty()) "删除空草稿" else "返回书架") }
                     }
                     Text(
-                        "运动值 ${motionScore.toInt()} · 自动标记会在新书面稳定后发生",
+                        if (mode == RecordingMode.MANUAL) "摄像头保持关闭 · 书面照片可稍后补拍"
+                        else "运动值 ${motionScore.toInt()} · 自动标记会在新书面稳定后发生",
                         style = MaterialTheme.typography.bodyMedium,
                         color = Ink.copy(alpha = 0.42f),
                         modifier = Modifier.padding(top = 12.dp).align(Alignment.CenterHorizontally),

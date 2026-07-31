@@ -648,8 +648,10 @@ private fun AudioEditor(
         ) {
             Row {
                 Text(
-                    "参考图 ${s.references.size} 张 · ${qualityLabel(s.references.firstOrNull()?.quality)}",
+                    if (s.references.isEmpty()) "书面照片待补拍 · 点此添加"
+                    else "参考图 ${s.references.size} 张 · ${qualityLabel(s.references.firstOrNull()?.quality)}",
                     modifier = Modifier.weight(1f),
+                    color = if (s.references.isEmpty()) Coral else Ink,
                 )
                 Text("›")
             }

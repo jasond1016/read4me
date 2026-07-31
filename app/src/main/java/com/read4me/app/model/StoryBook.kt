@@ -91,6 +91,7 @@ data class SpreadMarker(
 
 enum class MarkerSource { INITIAL, AUTOMATIC, MANUAL }
 enum class StoryStatus { IN_PROGRESS, COMPLETE }
+enum class RecordingMode { CAMERA, MANUAL }
 
 data class StoryBook(
     val id: String,
@@ -103,6 +104,8 @@ data class StoryBook(
     val status: StoryStatus = StoryStatus.COMPLETE,
     /** Stable recording/review cursor. It is deliberately independent of display order. */
     val resumeSpreadId: String? = markers.lastOrNull()?.spreadId,
+    /** Recording input policy is persistent and must not be inferred from later reference-photo edits. */
+    val recordingMode: RecordingMode = RecordingMode.CAMERA,
 ) {
     val resumeMarker get() = markers.firstOrNull { it.spreadId == resumeSpreadId }
     val playableDurationMs get() = spreads.sumOf(StorySpread::durationMs)

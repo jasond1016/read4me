@@ -18,6 +18,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.read4me.app.data.StoryRepository
 import com.read4me.app.audio.PersistentWaveformCache
 import com.read4me.app.model.StoryBook
+import com.read4me.app.model.RecordingMode
 import com.read4me.app.ui.LibraryScreen
 import com.read4me.app.ui.InsertSpreadScreen
 import com.read4me.app.ui.Read4MeTheme
@@ -38,6 +39,7 @@ import kotlinx.coroutines.withContext
 class RecordingRecoveryViewModel : ViewModel() {
     var pendingCandidate by mutableStateOf<StoryBook?>(null)
     var finishAfterSave by mutableStateOf(false)
+    var recordingMode by mutableStateOf(RecordingMode.CAMERA)
 }
 
 class MainActivity : ComponentActivity() {
@@ -45,7 +47,7 @@ class MainActivity : ComponentActivity() {
         data object Library : Destination
         data object Setup : Destination
         data object ChildReading : Destination
-        data class Recording(val book: StoryBook) : Destination
+        data class Recording(val book: StoryBook, val mode: RecordingMode = RecordingMode.CAMERA) : Destination
         data class Review(
             val book: StoryBook,
             val initialUndo: StoryBook? = null,
@@ -93,13 +95,16 @@ class MainActivity : ComponentActivity() {
                 val recordingRecovery: RecordingRecoveryViewModel = viewModel()
                 var destination: Destination by remember {
                     mutableStateOf(
-                        recordingRecovery.pendingCandidate?.let(Destination::Recording) ?: Destination.Library,
+                        recordingRecovery.pendingCandidate?.let {
+                            Destination.Recording(it, recordingRecovery.recordingMode)
+                        } ?: Destination.Library,
                     )
                 }
                 var books by remember { mutableStateOf(repository.loadAll()) }
                 var trashedBooks by remember { mutableStateOf(repository.loadTrash()) }
                 var recognitionSummaries by remember { mutableStateOf(recognitionHistory.summaries()) }
                 var permissionTarget: Destination? by remember { mutableStateOf(null) }
+                var pendingRecording by remember { mutableStateOf<Pair<String, RecordingMode>?>(null) }
                 var permissionMessage by remember { mutableStateOf<String?>(null) }
                 var archiveMessage by remember { mutableStateOf<String?>(null) }
                 var exportBook by remember { mutableStateOf<StoryBook?>(null) }
@@ -163,10 +168,27 @@ class MainActivity : ComponentActivity() {
                 val permissionLauncher = rememberLauncher { granted ->
                     if (granted) {
                         permissionMessage = null
-                        destination = permissionTarget ?: Destination.Library
+                        val pending = pendingRecording
+                        if (pending != null) {
+                            val draft = repository.createDraft(pending.first, pending.second)
+                            books = repository.loadAll()
+                            recordingRecovery.recordingMode = pending.second
+                            destination = Destination.Recording(draft, pending.second)
+                        } else {
+                            destination = permissionTarget ?: Destination.Library
+                        }
+                        pendingRecording = null
                         permissionTarget = null
                     } else {
-                        permissionMessage = "需要摄像头和麦克风权限，才能记录书面与陪读声音。"
+                        permissionMessage =
+                            if (pendingRecording?.second == RecordingMode.MANUAL ||
+                                (permissionTarget as? Destination.Recording)?.mode == RecordingMode.MANUAL
+                            ) {
+                                "手动翻页录制只需要麦克风权限。"
+                            } else {
+                                "需要摄像头和麦克风权限，才能记录书面与陪读声音。"
+                            }
+                        pendingRecording = null
                     }
                 }
 
@@ -192,10 +214,16 @@ class MainActivity : ComponentActivity() {
                         onOpenBook = { destination = Destination.Review(it) },
                         onPlayBook = { destination = Destination.AudioBook(it, returnToReview = false) },
                         onContinueBook = { book ->
-                            val target = Destination.Recording(book)
-                            if (hasCapturePermissions()) destination = target else {
+                            val mode = book.recordingMode
+                            val target = Destination.Recording(book, mode)
+                            recordingRecovery.recordingMode = mode
+                            val granted = if (mode == RecordingMode.MANUAL) hasAudioPermission() else hasCapturePermissions()
+                            if (granted) destination = target else {
                                 permissionTarget = target
-                                permissionLauncher.launch(arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO))
+                                permissionLauncher.launch(
+                                    if (mode == RecordingMode.MANUAL) arrayOf(Manifest.permission.RECORD_AUDIO)
+                                    else arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO),
+                                )
                             }
                         },
                         archiveMessage = archiveMessage,
@@ -271,15 +299,18 @@ class MainActivity : ComponentActivity() {
                     Destination.Setup -> SetupScreen(
                         message = permissionMessage,
                         onBack = { destination = Destination.Library },
-                        onStart = { title ->
-                            val draft = repository.createDraft(title)
-                            books = repository.loadAll()
-                            if (hasCapturePermissions()) {
-                                destination = Destination.Recording(draft)
+                        onStart = { title, mode ->
+                            recordingRecovery.recordingMode = mode
+                            val granted = if (mode == RecordingMode.MANUAL) hasAudioPermission() else hasCapturePermissions()
+                            if (granted) {
+                                val draft = repository.createDraft(title, mode)
+                                books = repository.loadAll()
+                                destination = Destination.Recording(draft, mode)
                             } else {
-                                permissionTarget = Destination.Recording(draft)
+                                pendingRecording = title to mode
                                 permissionLauncher.launch(
-                                    arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO),
+                                    if (mode == RecordingMode.MANUAL) arrayOf(Manifest.permission.RECORD_AUDIO)
+                                    else arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO),
                                 )
                             }
                         },
@@ -287,6 +318,7 @@ class MainActivity : ComponentActivity() {
 
                     is Destination.Recording -> RecordingScreen(
                         book = current.book,
+                        mode = current.mode,
                         repository = repository,
                         recovery = recordingRecovery,
                         onCancel = {
