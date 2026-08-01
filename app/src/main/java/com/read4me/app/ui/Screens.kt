@@ -147,6 +147,7 @@ fun LibraryScreen(
     books: List<StoryBook>,
     trashedBooks: List<StoryRepository.TrashedBook>,
     recognitionSummaries: List<RecognitionSummary>,
+    initialShellTab: WarmShellTab = WarmShellTab.LIBRARY,
     onCreateBook: () -> Unit,
     onChildMode: () -> Unit,
     onOpenBook: (StoryBook) -> Unit,
@@ -165,7 +166,7 @@ fun LibraryScreen(
     onClearMediaCache: () -> Unit,
     onRepairRecognition: (StoryBook, String) -> Unit,
 ) {
-    var shellTab by remember { mutableStateOf(WarmShellTab.LIBRARY) }
+    var shellTab by remember(initialShellTab) { mutableStateOf(initialShellTab) }
     var filter by remember { mutableStateOf("全部") }
     BackHandler(enabled = shellTab == WarmShellTab.ME) { shellTab = WarmShellTab.LIBRARY }
     Box(Modifier.fillMaxSize().background(WarmPaper)) {

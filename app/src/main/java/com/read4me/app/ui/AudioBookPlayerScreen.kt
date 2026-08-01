@@ -69,6 +69,7 @@ fun AudioBookPlayerScreen(
     book: StoryBook,
     initiallyShowPageList: Boolean = false,
     playWhenReady: Boolean = true,
+    pageListBackToCaller: Boolean = false,
     onEditSpread: (String, Boolean) -> Unit = { _, _ -> },
     onBack: () -> Unit,
 ) {
@@ -124,6 +125,7 @@ fun AudioBookPlayerScreen(
     BackHandler {
         when {
             showImage -> showImage = false
+            showPages && pageListBackToCaller -> onBack()
             showPages -> showPages = false
             else -> onBack()
         }
@@ -153,7 +155,9 @@ fun AudioBookPlayerScreen(
             book = book,
             selected = spreadIndex,
             playing = playing,
-            onBack = { showPages = false },
+            onBack = {
+                if (pageListBackToCaller) onBack() else showPages = false
+            },
             onEdit = { spreadId ->
                 val wasPlaying = controller?.isPlaying == true
                 controller?.pause()

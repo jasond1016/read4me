@@ -7,10 +7,13 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -19,6 +22,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -71,6 +75,310 @@ import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+
+@Composable
+fun BookOverviewScreen(
+    book: StoryBook,
+    onBack: () -> Unit,
+    onStartReading: () -> Unit,
+    onContinueRecording: () -> Unit,
+    onPlayBook: () -> Unit,
+    onBrowseSpreads: () -> Unit,
+    onOpenSpread: (String) -> Unit,
+    onOrganize: () -> Unit,
+    onBatchRecapture: () -> Unit,
+    onCreateBook: () -> Unit,
+    onOpenMe: () -> Unit,
+) {
+    val playbackSegments = book.spreads.flatMap { it.effectiveSegments }
+    val playable = playbackSegments.isNotEmpty() && playbackSegments.all { it.file.isFile }
+    val missingPhotos = book.markers.count { it.references.isEmpty() }
+    BackHandler(onBack = onBack)
+    Box(Modifier.fillMaxSize().background(WarmPaper)) {
+        Column(Modifier.fillMaxSize().padding(bottom = 76.dp).navigationBarsPadding()) {
+            BookOverviewTopBar(
+                onBack = onBack,
+                onOrganize = onOrganize,
+                missingPhotos = missingPhotos,
+                onBatchRecapture = onBatchRecapture,
+            )
+            BoxWithConstraints(Modifier.fillMaxSize()) {
+                val expanded = maxWidth >= 840.dp
+                if (expanded) {
+                    Row(
+                        Modifier.fillMaxSize().padding(horizontal = 36.dp, vertical = 24.dp),
+                        horizontalArrangement = Arrangement.spacedBy(36.dp),
+                    ) {
+                        Column(
+                            Modifier.weight(.42f).verticalScroll(rememberScrollState()),
+                            verticalArrangement = Arrangement.spacedBy(20.dp),
+                        ) {
+                            BookIdentity(book)
+                            BookOverviewActions(
+                                book,
+                                playable,
+                                onStartReading,
+                                onContinueRecording,
+                                onPlayBook,
+                                onBrowseSpreads,
+                            )
+                        }
+                        OverviewPages(
+                            book = book,
+                            maximum = 6,
+                            columns = 3,
+                            missingPhotos = missingPhotos,
+                            onBrowse = onBrowseSpreads,
+                            onOpenSpread = onOpenSpread,
+                            modifier = Modifier.weight(.58f).verticalScroll(rememberScrollState()),
+                        )
+                    }
+                } else {
+                    Column(
+                        Modifier.fillMaxSize().verticalScroll(rememberScrollState())
+                            .padding(horizontal = 20.dp, vertical = 20.dp),
+                        verticalArrangement = Arrangement.spacedBy(22.dp),
+                    ) {
+                        BookIdentity(book)
+                        BookOverviewActions(
+                            book,
+                            playable,
+                            onStartReading,
+                            onContinueRecording,
+                            onPlayBook,
+                            onBrowseSpreads,
+                        )
+                        OverviewPages(
+                            book = book,
+                            maximum = 2,
+                            columns = 2,
+                            missingPhotos = missingPhotos,
+                            onBrowse = onBrowseSpreads,
+                            onOpenSpread = onOpenSpread,
+                        )
+                        Spacer(Modifier.height(12.dp))
+                    }
+                }
+            }
+        }
+        WarmBottomShell(WarmShellTab.LIBRARY, Modifier.align(Alignment.BottomCenter)) { tab ->
+            when (tab) {
+                WarmShellTab.LIBRARY -> onBack()
+                WarmShellTab.READING -> onStartReading()
+                WarmShellTab.RECORD -> onCreateBook()
+                WarmShellTab.ME -> onOpenMe()
+            }
+        }
+    }
+}
+
+@Composable
+private fun BookOverviewTopBar(
+    onBack: () -> Unit,
+    onOrganize: () -> Unit,
+    missingPhotos: Int,
+    onBatchRecapture: () -> Unit,
+) {
+    var menuExpanded by remember { mutableStateOf(false) }
+    Surface(color = Color.White, shadowElevation = 3.dp) {
+        Row(
+            Modifier.fillMaxWidth().statusBarsPadding().height(68.dp).padding(horizontal = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            AppIconButton(AppIcons.Back, "返回书架", onBack, Modifier.size(52.dp), tint = WarmBrown)
+            Text(
+                "书籍详情",
+                style = MaterialTheme.typography.titleLarge,
+                color = WarmBrown,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.weight(1f).padding(start = 12.dp),
+            )
+            Box {
+                AppIconButton(AppIcons.More, "更多书籍操作", { menuExpanded = true }, tint = WarmBrown)
+                DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
+                    if (missingPhotos > 0) {
+                        DropdownMenuItem(
+                            text = { Text("批量补拍书面照片（$missingPhotos）") },
+                            onClick = {
+                                menuExpanded = false
+                                onBatchRecapture()
+                            },
+                        )
+                    }
+                    DropdownMenuItem(
+                        text = { Text("整理这本书") },
+                        onClick = {
+                            menuExpanded = false
+                            onOrganize()
+                        },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun BookIdentity(book: StoryBook) {
+    Row(
+        Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(20.dp),
+    ) {
+        StoryImage(
+            book.spreads.firstOrNull()?.imageFile,
+            Modifier.width(132.dp).aspectRatio(.76f).clip(RoundedCornerShape(24.dp)),
+        )
+        Column(
+            Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text(
+                book.title,
+                style = MaterialTheme.typography.headlineSmall,
+                color = WarmBrown,
+                fontWeight = FontWeight.Bold,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Surface(color = WarmMoss, shape = RoundedCornerShape(12.dp)) {
+                Text(
+                    if (book.status == StoryStatus.COMPLETE) "已完成" else "录制中",
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                )
+            }
+            Text(
+                "${book.spreads.size} 个书面 · ${formatDuration(book.playableDurationMs)}",
+                color = WarmBrown.copy(alpha = .67f),
+                style = MaterialTheme.typography.bodyLarge,
+            )
+        }
+    }
+}
+
+@Composable
+private fun BookOverviewActions(
+    book: StoryBook,
+    playable: Boolean,
+    onStartReading: () -> Unit,
+    onContinueRecording: () -> Unit,
+    onPlayBook: () -> Unit,
+    onBrowseSpreads: () -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Button(
+            onClick = if (book.status == StoryStatus.COMPLETE) onStartReading else onContinueRecording,
+            modifier = Modifier.fillMaxWidth().height(60.dp),
+            shape = RoundedCornerShape(22.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = WarmMoss, contentColor = Color.White),
+        ) {
+            AppIcon(
+                if (book.status == StoryStatus.COMPLETE) AppIcons.Reading else AppIcons.Restart,
+                null,
+                tint = Color.White,
+                size = 28.dp,
+            )
+            Text(
+                if (book.status == StoryStatus.COMPLETE) "开始陪读" else "继续录制",
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(start = 9.dp),
+            )
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            OutlinedButton(
+                onClick = onPlayBook,
+                enabled = playable,
+                modifier = Modifier.weight(1f).height(56.dp),
+                shape = RoundedCornerShape(20.dp),
+            ) {
+                AppIcon(AppIcons.Play, null, tint = WarmCoral)
+                Text("整本播放", color = WarmCoral, modifier = Modifier.padding(start = 6.dp))
+            }
+            OutlinedButton(
+                onClick = onBrowseSpreads,
+                modifier = Modifier.weight(1f).height(56.dp),
+                shape = RoundedCornerShape(20.dp),
+            ) {
+                AppIcon(AppIcons.List, null, tint = WarmMoss)
+                Text("浏览书面", color = WarmMoss, modifier = Modifier.padding(start = 6.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun OverviewPages(
+    book: StoryBook,
+    maximum: Int,
+    columns: Int,
+    missingPhotos: Int,
+    onBrowse: () -> Unit,
+    onOpenSpread: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "书面",
+                style = MaterialTheme.typography.titleLarge,
+                color = WarmBrown,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.weight(1f),
+            )
+            TextButton(onClick = onBrowse) {
+                Text("查看全部", color = WarmMoss)
+                AppIcon(AppIcons.Forward, null, tint = WarmMoss, size = 18.dp)
+            }
+        }
+        book.spreads.take(maximum).chunked(columns).forEach { row ->
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                row.forEach { spread ->
+                    Surface(
+                        color = Color.White,
+                        shape = RoundedCornerShape(18.dp),
+                        shadowElevation = 2.dp,
+                        modifier = Modifier.weight(1f).clickable { onOpenSpread(spread.spreadId) },
+                    ) {
+                        Column {
+                            StoryImage(
+                                spread.imageFile,
+                                Modifier.fillMaxWidth().aspectRatio(.92f),
+                            )
+                            Row(
+                                Modifier.fillMaxWidth().padding(horizontal = 9.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text("第 ${spread.ordinal} 页", color = WarmBrown, modifier = Modifier.weight(1f))
+                                Text(formatDuration(spread.durationMs), color = WarmBrown.copy(alpha = .58f))
+                            }
+                        }
+                    }
+                }
+                repeat(columns - row.size) { Spacer(Modifier.weight(1f)) }
+            }
+        }
+        if (book.spreads.isEmpty()) {
+            Text("这本书还没有书面", color = WarmBrown.copy(alpha = .58f))
+        }
+        if (missingPhotos > 0) {
+            Surface(color = WarmAmber.copy(alpha = .14f), shape = RoundedCornerShape(18.dp)) {
+                Row(
+                    Modifier.fillMaxWidth().padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    AppIcon(AppIcons.Reading, null, tint = WarmAmber)
+                    Text(
+                        "$missingPhotos 个书面还需要补拍照片",
+                        color = WarmBrown,
+                        modifier = Modifier.padding(start = 10.dp),
+                    )
+                }
+            }
+        }
+    }
+}
 
 @Composable
 fun ReviewScreen(

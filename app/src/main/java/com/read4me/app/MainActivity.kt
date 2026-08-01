@@ -30,11 +30,13 @@ import com.read4me.app.ui.RerecordScreen
 import com.read4me.app.ui.RecaptureScreen
 import com.read4me.app.ui.ReferenceVerificationScreen
 import com.read4me.app.ui.ReviewScreen
+import com.read4me.app.ui.BookOverviewScreen
 import com.read4me.app.ui.SetupScreen
 import com.read4me.app.ui.StoryImageLoader
 import com.read4me.app.ui.ChildReadingScreen
 import com.read4me.app.ui.AudioBookPlayerScreen
 import com.read4me.app.ui.CompletionSummaryScreen
+import com.read4me.app.ui.WarmShellTab
 import com.read4me.app.vision.RecognitionHistoryStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -48,12 +50,17 @@ class RecordingRecoveryViewModel : ViewModel() {
 
 class MainActivity : ComponentActivity() {
     private sealed interface Destination {
-        enum class AudioBookReturn { LIBRARY, REVIEW, COMPLETION_SUMMARY }
+        enum class AudioBookReturn { LIBRARY, DETAILS, REVIEW, COMPLETION_SUMMARY }
 
         data object Library : Destination
         data object Setup : Destination
-        data object ChildReading : Destination
-        data class Recording(val book: StoryBook, val mode: RecordingMode = RecordingMode.CAMERA) : Destination
+        data class ChildReading(val returnBookId: String? = null) : Destination
+        data class BookDetails(val book: StoryBook) : Destination
+        data class Recording(
+            val book: StoryBook,
+            val mode: RecordingMode = RecordingMode.CAMERA,
+            val returnToDetails: Boolean = false,
+        ) : Destination
         data class Review(
             val book: StoryBook,
             val initialUndo: StoryBook? = null,
@@ -66,27 +73,36 @@ class MainActivity : ComponentActivity() {
             val focusedSpreadId: String? = null,
             val pageListReturnTo: AudioBookReturn? = null,
             val resumePageListPlayback: Boolean = false,
+            val returnToDetails: Boolean = false,
+            val pageListBackToCaller: Boolean = false,
         ) : Destination
         data class AudioBook(
             val book: StoryBook,
             val returnTo: AudioBookReturn,
             val initiallyShowPageList: Boolean = false,
             val playWhenReady: Boolean = true,
+            val pageListBackToCaller: Boolean = false,
         ) : Destination
         data class CompletionSummary(val book: StoryBook) : Destination
-        data class Rerecord(val book: StoryBook, val spreadId: String) : Destination
+        data class Rerecord(
+            val book: StoryBook,
+            val spreadId: String,
+            val returnToDetails: Boolean = false,
+        ) : Destination
         data class Recapture(
             val book: StoryBook,
             val spreadId: String,
             val undo: StoryBook?,
             val undoImage: java.io.File?,
             val returnToLibrary: Boolean = false,
+            val returnToDetails: Boolean = false,
         ) : Destination
         data class BatchRecapture(
             val book: StoryBook,
             val remainingSpreadIds: List<String>,
             val completed: Int,
             val total: Int,
+            val returnToDetails: Boolean = false,
         ) : Destination
         data class VerifyReference(
             val book: StoryBook,
@@ -94,6 +110,7 @@ class MainActivity : ComponentActivity() {
             val undo: StoryBook?,
             val undoImage: java.io.File?,
             val returnToLibrary: Boolean,
+            val returnToDetails: Boolean = false,
         ) : Destination
         data class InsertSpread(
             val baseBook: StoryBook,
@@ -103,6 +120,7 @@ class MainActivity : ComponentActivity() {
             val organizeImages: List<java.io.File>,
             val editorUndo: StoryBook?,
             val editorUndoImages: List<java.io.File>,
+            val returnToDetails: Boolean = false,
         ) : Destination
     }
 
@@ -128,6 +146,7 @@ class MainActivity : ComponentActivity() {
                 var pendingRecording by remember { mutableStateOf<Pair<String, RecordingMode>?>(null) }
                 var permissionMessage by remember { mutableStateOf<String?>(null) }
                 var archiveMessage by remember { mutableStateOf<String?>(null) }
+                var libraryInitialTab by remember { mutableStateOf(WarmShellTab.LIBRARY) }
                 val scope = rememberCoroutineScope()
 
                 val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -202,21 +221,25 @@ class MainActivity : ComponentActivity() {
                         books = books,
                         trashedBooks = trashedBooks,
                         recognitionSummaries = recognitionSummaries,
+                        initialShellTab = libraryInitialTab,
                         onCreateBook = {
                             permissionMessage = null
                             destination = Destination.Setup
                         },
                         onChildMode = {
                             if (hasCameraPermission()) {
-                                destination = Destination.ChildReading
+                                destination = Destination.ChildReading()
                             } else {
-                                permissionTarget = Destination.ChildReading
+                                permissionTarget = Destination.ChildReading()
                                 permissionLauncher.launch(
                                     arrayOf(Manifest.permission.CAMERA),
                                 )
                             }
                         },
-                        onOpenBook = { destination = Destination.Review(it) },
+                        onOpenBook = {
+                            libraryInitialTab = WarmShellTab.LIBRARY
+                            destination = Destination.BookDetails(it)
+                        },
                         onPlayBook = { destination = Destination.AudioBook(it, Destination.AudioBookReturn.LIBRARY) },
                         onContinueBook = { book ->
                             val mode = book.recordingMode
@@ -318,11 +341,95 @@ class MainActivity : ComponentActivity() {
                         },
                     )
 
-                    Destination.ChildReading -> ChildReadingScreen(
+                    is Destination.ChildReading -> ChildReadingScreen(
                         books = books,
                         recognitionHistory = recognitionHistory,
                         onExit = {
                             recognitionSummaries = recognitionHistory.summaries()
+                            destination = current.returnBookId?.let { bookId ->
+                                repository.loadAll().firstOrNull { it.id == bookId }?.let { Destination.BookDetails(it) }
+                            } ?: Destination.Library
+                        },
+                    )
+
+                    is Destination.BookDetails -> BookOverviewScreen(
+                        book = current.book,
+                        onBack = {
+                            libraryInitialTab = WarmShellTab.LIBRARY
+                            books = repository.loadAll()
+                            destination = Destination.Library
+                        },
+                        onStartReading = {
+                            val target = Destination.ChildReading(current.book.id)
+                            if (hasCameraPermission()) destination = target
+                            else {
+                                permissionTarget = target
+                                permissionLauncher.launch(arrayOf(Manifest.permission.CAMERA))
+                            }
+                        },
+                        onContinueRecording = {
+                            val mode = current.book.recordingMode
+                            val target = Destination.Recording(current.book, mode, returnToDetails = true)
+                            recordingRecovery.recordingMode = mode
+                            val granted = if (mode == RecordingMode.MANUAL) hasAudioPermission() else hasCapturePermissions()
+                            if (granted) destination = target
+                            else {
+                                permissionTarget = target
+                                permissionLauncher.launch(
+                                    if (mode == RecordingMode.MANUAL) arrayOf(Manifest.permission.RECORD_AUDIO)
+                                    else arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO),
+                                )
+                            }
+                        },
+                        onPlayBook = {
+                            destination = Destination.AudioBook(
+                                current.book,
+                                Destination.AudioBookReturn.DETAILS,
+                            )
+                        },
+                        onBrowseSpreads = {
+                            destination = Destination.AudioBook(
+                                current.book,
+                                Destination.AudioBookReturn.DETAILS,
+                                initiallyShowPageList = true,
+                                playWhenReady = false,
+                                pageListBackToCaller = true,
+                            )
+                        },
+                        onOpenSpread = { spreadId ->
+                            destination = Destination.Review(
+                                current.book,
+                                focusedSpreadId = spreadId,
+                                returnToDetails = true,
+                            )
+                        },
+                        onOrganize = {
+                            destination = Destination.Review(
+                                current.book,
+                                organizeDraft = current.book,
+                                returnToDetails = true,
+                            )
+                        },
+                        onBatchRecapture = {
+                            val missingSpreadIds = current.book.markers
+                                .filter { it.references.isEmpty() }
+                                .map { it.spreadId }
+                            val target = Destination.BatchRecapture(
+                                current.book,
+                                missingSpreadIds,
+                                completed = 0,
+                                total = missingSpreadIds.size,
+                                returnToDetails = true,
+                            )
+                            if (hasCameraPermission()) destination = target
+                            else {
+                                permissionTarget = target
+                                permissionLauncher.launch(arrayOf(Manifest.permission.CAMERA))
+                            }
+                        },
+                        onCreateBook = { destination = Destination.Setup },
+                        onOpenMe = {
+                            libraryInitialTab = WarmShellTab.ME
                             destination = Destination.Library
                         },
                     )
@@ -355,7 +462,10 @@ class MainActivity : ComponentActivity() {
                         onCancel = {
                             books = repository.loadAll()
                             trashedBooks = repository.loadTrash()
-                            destination = Destination.Library
+                            destination = if (current.returnToDetails) {
+                                books.firstOrNull { it.id == current.book.id }?.let { Destination.BookDetails(it) }
+                                    ?: Destination.Library
+                            } else Destination.Library
                         },
                         onFinished = { book ->
                             books = repository.loadAll()
@@ -372,7 +482,7 @@ class MainActivity : ComponentActivity() {
                                 Destination.AudioBookReturn.COMPLETION_SUMMARY,
                             )
                         },
-                        onReview = { destination = Destination.Review(current.book) },
+                        onReview = { destination = Destination.BookDetails(current.book) },
                     )
 
                     is Destination.Review -> ReviewScreen(
@@ -381,7 +491,11 @@ class MainActivity : ComponentActivity() {
                         initialSelectedSpreadId = current.focusedSpreadId,
                         returnActionLabel = if (current.pageListReturnTo != null) "完成" else null,
                         onRerecord = { updatedBook, spreadId ->
-                            val target = Destination.Rerecord(updatedBook, spreadId)
+                            val target = Destination.Rerecord(
+                                updatedBook,
+                                spreadId,
+                                returnToDetails = current.returnToDetails,
+                            )
                             if (hasAudioPermission()) {
                                 destination = target
                             } else {
@@ -390,7 +504,13 @@ class MainActivity : ComponentActivity() {
                             }
                         },
                         onRecapture = { updatedBook, spreadId, undo, undoImage ->
-                            val target = Destination.Recapture(updatedBook, spreadId, undo, undoImage)
+                            val target = Destination.Recapture(
+                                updatedBook,
+                                spreadId,
+                                undo,
+                                undoImage,
+                                returnToDetails = current.returnToDetails,
+                            )
                             if (hasCameraPermission()) destination = target
                             else {
                                 permissionTarget = target
@@ -403,6 +523,7 @@ class MainActivity : ComponentActivity() {
                                 missingSpreadIds,
                                 completed = 0,
                                 total = missingSpreadIds.size,
+                                returnToDetails = current.returnToDetails,
                             )
                             if (hasCameraPermission()) destination = target
                             else {
@@ -419,6 +540,7 @@ class MainActivity : ComponentActivity() {
                                 organizeImages,
                                 editorUndo,
                                 editorUndoImages,
+                                returnToDetails = current.returnToDetails,
                             )
                             if (hasCameraPermission()) destination = target
                             else {
@@ -426,7 +548,13 @@ class MainActivity : ComponentActivity() {
                                 permissionLauncher.launch(arrayOf(Manifest.permission.CAMERA))
                             }
                         },
-                        onPlayBook = { destination = Destination.AudioBook(it, Destination.AudioBookReturn.REVIEW) },
+                        onPlayBook = {
+                            destination = Destination.AudioBook(
+                                it,
+                                if (current.returnToDetails) Destination.AudioBookReturn.DETAILS
+                                else Destination.AudioBookReturn.REVIEW,
+                            )
+                        },
                         initialUndo = current.initialUndo,
                         initialUndoImage = current.undoImage,
                         initialUndoImages = current.undoImages,
@@ -443,7 +571,11 @@ class MainActivity : ComponentActivity() {
                                     current.pageListReturnTo,
                                     initiallyShowPageList = true,
                                     playWhenReady = current.resumePageListPlayback,
+                                    pageListBackToCaller = current.pageListBackToCaller,
                                 )
+                            } else if (current.returnToDetails) {
+                                val refreshed = repository.loadAll().firstOrNull { it.id == current.book.id } ?: current.book
+                                Destination.BookDetails(refreshed)
                             } else Destination.Library
                         },
                     )
@@ -452,6 +584,7 @@ class MainActivity : ComponentActivity() {
                         book = current.book,
                         initiallyShowPageList = current.initiallyShowPageList,
                         playWhenReady = current.playWhenReady,
+                        pageListBackToCaller = current.pageListBackToCaller,
                         onEditSpread = { spreadId, wasPlaying ->
                             val refreshed = repository.loadAll().firstOrNull { it.id == current.book.id } ?: current.book
                             destination = Destination.Review(
@@ -459,11 +592,13 @@ class MainActivity : ComponentActivity() {
                                 focusedSpreadId = spreadId,
                                 pageListReturnTo = current.returnTo,
                                 resumePageListPlayback = wasPlaying,
+                                pageListBackToCaller = current.pageListBackToCaller,
                             )
                         },
                         onBack = {
                             destination = when (current.returnTo) {
                                 Destination.AudioBookReturn.LIBRARY -> Destination.Library
+                                Destination.AudioBookReturn.DETAILS -> Destination.BookDetails(current.book)
                                 Destination.AudioBookReturn.REVIEW -> Destination.Review(current.book)
                                 Destination.AudioBookReturn.COMPLETION_SUMMARY -> Destination.CompletionSummary(current.book)
                             }
@@ -474,10 +609,20 @@ class MainActivity : ComponentActivity() {
                         book = current.book,
                         spreadId = current.spreadId,
                         repository = repository,
-                        onCancel = { destination = Destination.Review(current.book) },
+                        onCancel = {
+                            destination = Destination.Review(
+                                current.book,
+                                focusedSpreadId = current.spreadId,
+                                returnToDetails = current.returnToDetails,
+                            )
+                        },
                         onFinished = { updated ->
                             books = repository.loadAll()
-                            destination = Destination.Review(updated)
+                            destination = Destination.Review(
+                                updated,
+                                focusedSpreadId = current.spreadId,
+                                returnToDetails = current.returnToDetails,
+                            )
                         },
                     )
 
@@ -487,13 +632,23 @@ class MainActivity : ComponentActivity() {
                         repository = repository,
                         onCancel = {
                             destination = if (current.returnToLibrary) Destination.Library else {
-                                Destination.Review(current.book, current.undo, current.undoImage)
+                                Destination.Review(
+                                    current.book,
+                                    current.undo,
+                                    current.undoImage,
+                                    returnToDetails = current.returnToDetails,
+                                )
                             }
                         },
                         onFinished = { updated, previous, image ->
                             books = repository.loadAll()
                             destination = Destination.VerifyReference(
-                                updated, current.spreadId, previous, image, current.returnToLibrary,
+                                updated,
+                                current.spreadId,
+                                previous,
+                                image,
+                                current.returnToLibrary,
+                                returnToDetails = current.returnToDetails,
                             )
                         },
                     )
@@ -501,7 +656,8 @@ class MainActivity : ComponentActivity() {
                     is Destination.BatchRecapture -> {
                         val spreadId = current.remainingSpreadIds.firstOrNull()
                         if (spreadId == null) {
-                            destination = Destination.Review(current.book)
+                            destination = if (current.returnToDetails) Destination.BookDetails(current.book)
+                            else Destination.Review(current.book)
                         } else {
                             key(current.book.id, spreadId) {
                                 RecaptureScreen(
@@ -511,7 +667,10 @@ class MainActivity : ComponentActivity() {
                                     progressLabel = "${current.completed + 1}/${current.total}",
                                     onSkip = {
                                         val remaining = current.remainingSpreadIds.drop(1)
-                                        destination = if (remaining.isEmpty()) Destination.Review(current.book)
+                                        destination = if (remaining.isEmpty()) {
+                                            if (current.returnToDetails) Destination.BookDetails(current.book)
+                                            else Destination.Review(current.book)
+                                        }
                                         else current.copy(
                                             remainingSpreadIds = remaining,
                                             completed = current.completed + 1,
@@ -519,13 +678,21 @@ class MainActivity : ComponentActivity() {
                                     },
                                     onCancel = {
                                         books = repository.loadAll()
-                                        destination = Destination.Review(current.book)
+                                        destination = if (current.returnToDetails) Destination.BookDetails(current.book)
+                                        else Destination.Review(current.book)
                                     },
                                     onFinished = { updated, _, _ ->
                                         books = repository.loadAll()
                                         val remaining = current.remainingSpreadIds.drop(1)
                                         destination = if (remaining.isEmpty()) {
-                                            Destination.VerifyReference(updated, spreadId, null, null, false)
+                                            Destination.VerifyReference(
+                                                updated,
+                                                spreadId,
+                                                null,
+                                                null,
+                                                returnToLibrary = false,
+                                                returnToDetails = current.returnToDetails,
+                                            )
                                         } else {
                                             current.copy(
                                                 book = updated,
@@ -547,14 +714,16 @@ class MainActivity : ComponentActivity() {
                             recognitionSummaries = recognitionHistory.summaries()
                             books = repository.loadAll()
                             destination = if (current.returnToLibrary) Destination.Library else {
-                                Destination.Review(current.book, current.undo, current.undoImage)
+                                if (current.returnToDetails) Destination.BookDetails(current.book)
+                                else Destination.Review(current.book, current.undo, current.undoImage)
                             }
                         },
                         onFinished = {
                             recognitionSummaries = recognitionHistory.summaries()
                             books = repository.loadAll()
                             destination = if (current.returnToLibrary) Destination.Library else {
-                                Destination.Review(current.book, current.undo, current.undoImage)
+                                if (current.returnToDetails) Destination.BookDetails(current.book)
+                                else Destination.Review(current.book, current.undo, current.undoImage)
                             }
                         },
                     )
@@ -572,6 +741,7 @@ class MainActivity : ComponentActivity() {
                                 organizeSelected = current.organizeSelected,
                                 organizeCurrent = current.anchorSpreadId,
                                 organizeImages = current.organizeImages,
+                                returnToDetails = current.returnToDetails,
                             )
                         },
                         onFinished = { updated, previous, image ->
@@ -583,6 +753,7 @@ class MainActivity : ComponentActivity() {
                                 organizeSelected = current.organizeSelected,
                                 organizeCurrent = current.anchorSpreadId,
                                 organizeImages = current.organizeImages + image,
+                                returnToDetails = current.returnToDetails,
                             )
                         },
                     )
