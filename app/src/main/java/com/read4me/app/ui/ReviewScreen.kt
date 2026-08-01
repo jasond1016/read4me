@@ -69,6 +69,7 @@ import com.read4me.app.model.StorySpread
 import com.read4me.app.model.StoryStatus
 import java.io.File
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
 @Composable
@@ -110,6 +111,8 @@ fun ReviewScreen(
         }
     var playingId by remember { mutableStateOf<String?>(null) }
     var playhead by remember { mutableStateOf<Long?>(null) }
+    var playbackStart by remember { mutableStateOf<Long?>(null) }
+    var playbackEnd by remember { mutableStateOf<Long?>(null) }
     var waveform by remember { mutableStateOf<FloatArray?>(null) }
     var waveformKey by remember { mutableStateOf("") }
     var more by remember { mutableStateOf(false) }
@@ -127,6 +130,8 @@ fun ReviewScreen(
         player.stop()
         playingId = null
         playhead = null
+        playbackStart = null
+        playbackEnd = null
     }
     fun choose(id: String) {
         stop()
@@ -158,6 +163,17 @@ fun ReviewScreen(
                         .getOrElse { FloatArray(0) }
                 }
             if (waveformKey == key) waveform = loaded
+        }
+    }
+    LaunchedEffect(playingId, playbackStart, playbackEnd) {
+        if (playingId == null) return@LaunchedEffect
+        val start = playbackStart ?: return@LaunchedEffect
+        val end = playbackEnd ?: return@LaunchedEffect
+        while (true) {
+            player.progress()?.let { progress ->
+                playhead = start + ((end - start) * progress).toLong()
+            }
+            delay(50)
         }
     }
     fun cancelOrganize() {
@@ -277,6 +293,7 @@ fun ReviewScreen(
                     playingId == selectedId,
                     waveform,
                     playhead,
+                    playbackStart,
                     more,
                     returnActionLabel != null,
                     { more = !more },
@@ -286,21 +303,34 @@ fun ReviewScreen(
                         else {
                             stop()
                             playingId = selectedId
-                            playhead = a
+                            playbackStart = a ?: selected.trimStartMs
+                            playbackEnd = b ?: selected.trimEndMs
+                            playhead = playbackStart
                             val clips =
                                 if (a == null || b == null) selected.effectiveSegments
                                 else NarrationTimeline.clip(selected.sourceSegments, a, b)
                             if (
                                 !player.play(
                                     clips,
-                                    onError = { playingId = null },
+                                    onError = {
+                                        playingId = null
+                                        playhead = null
+                                        playbackStart = null
+                                        playbackEnd = null
+                                    },
                                     onFinished = {
                                         playingId = null
                                         playhead = null
+                                        playbackStart = null
+                                        playbackEnd = null
                                     },
                                 )
-                            )
+                            ) {
                                 playingId = null
+                                playhead = null
+                                playbackStart = null
+                                playbackEnd = null
+                            }
                         }
                     },
                     trim = { a, b ->
@@ -463,6 +493,7 @@ private fun FocusPane(
     playing: Boolean,
     waveform: FloatArray?,
     playhead: Long?,
+    playbackStart: Long?,
     more: Boolean,
     focusedEdit: Boolean,
     onMore: () -> Unit,
@@ -489,6 +520,7 @@ private fun FocusPane(
             spread,
             waveform,
             playhead,
+            playbackStart,
             more,
             !focusedEdit,
             onMore,
@@ -581,6 +613,7 @@ private fun AudioEditor(
     s: StorySpread,
     peaks: FloatArray?,
     playhead: Long?,
+    playbackStart: Long?,
     more: Boolean,
     allowAdvanced: Boolean,
     onMore: () -> Unit,
@@ -608,7 +641,7 @@ private fun AudioEditor(
             "开头 ${formatBoundary(range.start.toLong())} · 结尾 ${formatBoundary(range.endInclusive.toLong())} · 已选 ${formatDuration((range.endInclusive-range.start).toLong())}",
             color = Ink.copy(.65f),
         )
-        Wave(peaks, total, playhead, preview)
+        Wave(peaks, total, playbackStart, playhead, preview)
         if (total >= 500)
             RangeSlider(
                 range,
@@ -726,7 +759,13 @@ private fun AudioEditor(
 }
 
 @Composable
-private fun Wave(p: FloatArray?, total: Long, pos: Long?, preview: (Long, Long) -> Unit) {
+private fun Wave(
+    p: FloatArray?,
+    total: Long,
+    playbackStart: Long?,
+    pos: Long?,
+    preview: (Long, Long) -> Unit,
+) {
     if (p == null) {
         Text("正在读取当前书面波形…")
         return
@@ -748,15 +787,21 @@ private fun Wave(p: FloatArray?, total: Long, pos: Long?, preview: (Long, Long) 
             }
     ) {
         val c = size.height / 2
+        val playedFrom = playbackStart?.coerceIn(0, total)?.toFloat()
+        val playedTo = pos?.coerceIn(0, total)?.toFloat()
         p.forEachIndexed { i, v ->
             val x = (i + .5f) * size.width / p.size
+            val time = (i + .5f) * total / p.size
             val h = maxOf(1f, v * c * .85f)
-            drawLine(Moss, Offset(x, c - h), Offset(x, c + h), 1.5f)
+            val color =
+                if (playedFrom != null && playedTo != null && time in playedFrom..playedTo) Honey
+                else Moss
+            drawLine(color, Offset(x, c - h), Offset(x, c + h), 1.5f)
         }
         pos?.takeIf { total > 0 }
             ?.let {
                 val x = it.toFloat() / total * size.width
-                drawLine(Coral, Offset(x, 0f), Offset(x, size.height), 3f)
+                drawLine(Honey, Offset(x, 0f), Offset(x, size.height), 3f)
             }
     }
 }
