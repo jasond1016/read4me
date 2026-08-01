@@ -23,6 +23,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -50,6 +51,8 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -95,6 +98,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.read4me.app.RecordingRecoveryViewModel
+import com.read4me.app.R
 import com.read4me.app.audio.AudioSegmentPlayer
 import com.read4me.app.audio.AudioBookPlaybackService
 import com.read4me.app.audio.PersistentWaveformCache
@@ -161,140 +165,192 @@ fun LibraryScreen(
     onClearMediaCache: () -> Unit,
     onRepairRecognition: (StoryBook, String) -> Unit,
 ) {
-    Surface(Modifier.fillMaxSize(), color = Paper) {
-        LazyColumn(
-            contentPadding = PaddingValues(horizontal = 24.dp, vertical = 32.dp),
-            verticalArrangement = Arrangement.spacedBy(18.dp),
+    var shellTab by remember { mutableStateOf(WarmShellTab.LIBRARY) }
+    var filter by remember { mutableStateOf("全部") }
+    BackHandler(enabled = shellTab == WarmShellTab.ME) { shellTab = WarmShellTab.LIBRARY }
+    Box(Modifier.fillMaxSize().background(WarmPaper)) {
+        Surface(
+            Modifier.fillMaxSize().padding(bottom = 76.dp).navigationBarsPadding(),
+            color = WarmPaper,
         ) {
-            item {
-                Text("留声绘本", style = MaterialTheme.typography.displayLarge, color = Ink)
-                Text(
-                    "把第一次陪读，留在每次翻页里。",
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = Ink.copy(alpha = 0.68f),
-                    modifier = Modifier.padding(top = 6.dp, bottom = 10.dp),
-                )
-            }
-
-            item {
-                Button(
-                    onClick = onCreateBook,
-                    modifier = Modifier.fillMaxWidth().height(58.dp),
-                    shape = RoundedCornerShape(18.dp),
-                ) {
-                    Text("＋ 录一本新书", fontWeight = FontWeight.Bold)
-                }
-            }
-
-            item {
-                OutlinedButton(onClick = onImport, modifier = Modifier.fillMaxWidth()) {
-                    Text("导入 / 恢复绘本")
-                }
-                Row(
-                    Modifier.fillMaxWidth().padding(top = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    OutlinedButton(onClick = onExportLibrary, modifier = Modifier.weight(1f)) {
-                        Text("导出整库")
-                    }
-                    OutlinedButton(onClick = onImportLibrary, modifier = Modifier.weight(1f)) {
-                        Text("恢复整库")
-                    }
-                }
-                TextButton(onClick = onClearMediaCache, modifier = Modifier.fillMaxWidth()) {
-                    Text("清除波形和缩略图缓存")
-                }
-                archiveMessage?.let {
-                    Text(it, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 6.dp))
-                }
-            }
-
-            if (books.isNotEmpty()) {
-                item {
-                    OutlinedButton(
-                        onClick = onChildMode,
-                        modifier = Modifier.fillMaxWidth().height(56.dp),
-                        shape = RoundedCornerShape(18.dp),
+            BoxWithConstraints {
+                val wide = maxWidth >= 700.dp
+                if (shellTab == WarmShellTab.LIBRARY) {
+                    LibraryHome(
+                        books, recognitionSummaries, filter, { filter = it }, wide, onCreateBook,
+                        onOpenBook, onPlayBook, onContinueBook, onExport, onRename, onMoveToTrash,
+                    )
+                } else {
+                    Column(
+                        Modifier.fillMaxSize().verticalScroll(rememberScrollState())
+                            .padding(horizontal = if (wide) 36.dp else 20.dp, vertical = 24.dp),
                     ) {
-                        Text("打开孩子阅读模式", color = Moss, fontWeight = FontWeight.Bold)
+                        LibraryMaintenance(
+                            books, trashedBooks, recognitionSummaries, wide, archiveMessage, onImport,
+                            onImportLibrary, onExportLibrary, onClearRecognitionHistory, onClearMediaCache,
+                            onRepairRecognition, onRestore, onPermanentlyDelete,
+                        )
+                        Spacer(Modifier.height(28.dp))
                     }
                 }
             }
-
-            if (recognitionSummaries.isNotEmpty()) {
-                item {
-                    Text("识别记录与补拍建议", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.padding(top = 8.dp))
-                    Text("只记录本地识别分数，不保存摄像头画面。", style = MaterialTheme.typography.bodyMedium, color = Ink.copy(alpha = .58f))
-                }
-                items(recognitionSummaries, key = { "${it.bookId}:${it.spreadId}" }) { summary ->
-                    val book = books.firstOrNull { it.id == summary.bookId }
-                    val spread = book?.spreads?.firstOrNull { it.spreadId == summary.spreadId }
-                    if (book != null) {
-                        Card(shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = SoftWhite)) {
-                            Column(Modifier.fillMaxWidth().padding(14.dp)) {
-                                Text("${book.title} · 书面 ${spread?.ordinal ?: "-"}", fontWeight = FontWeight.Bold)
-                                Text(
-                                    "成功 ${summary.confirmations} 次 · 失败 ${summary.failures} 次 · 手动纠正 ${summary.manualCorrections} 次",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = Ink.copy(alpha = .68f),
-                                )
-                                if (summary.needsNewReference) {
-                                    Text("建议：为这个书面补拍一张角度或光线不同的清晰参考照片。", color = Coral, style = MaterialTheme.typography.bodyMedium)
-                                    if (spread != null) {
-                                        Button(
-                                            onClick = { onRepairRecognition(book, spread.spreadId) },
-                                            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                                            shape = RoundedCornerShape(14.dp),
-                                            colors = ButtonDefaults.buttonColors(containerColor = Moss),
-                                        ) { Text("补拍并立即验证") }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                item { TextButton(onClick = onClearRecognitionHistory) { Text("清除识别记录") } }
-            }
-
-            if (books.isEmpty()) {
-                item { EmptyLibraryCard() }
-            } else {
-                item {
-                    Text(
-                        "我们家的故事",
-                        style = MaterialTheme.typography.headlineMedium,
-                        modifier = Modifier.padding(top = 8.dp),
-                    )
-                }
-                items(books, key = { it.id }) { book ->
-                    BookCard(
-                        book = book,
-                        onClick = { onOpenBook(book) },
-                        onExport = { onExport(book) },
-                        onRename = { onRename(book, it) },
-                        onMoveToTrash = { onMoveToTrash(book) },
-                        onContinue = { onContinueBook(book) },
-                        onPlay = { onPlayBook(book) },
-                    )
-                }
-            }
-
-            if (trashedBooks.isNotEmpty()) {
-                item {
-                    Text("回收站", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.padding(top = 12.dp))
-                    Text("保留 30 天后自动永久删除", style = MaterialTheme.typography.bodyMedium, color = Ink.copy(alpha = .58f))
-                }
-                items(trashedBooks, key = { it.book.id }) { trashed ->
-                    TrashBookCard(
-                        trashed = trashed,
-                        onRestore = { onRestore(trashed) },
-                        onPermanentlyDelete = { onPermanentlyDelete(trashed) },
-                    )
-                }
+        }
+        WarmBottomShell(shellTab, Modifier.align(Alignment.BottomCenter)) { tab ->
+            when (tab) {
+                WarmShellTab.READING -> onChildMode()
+                WarmShellTab.RECORD -> onCreateBook()
+                else -> shellTab = tab
             }
         }
     }
 }
+
+@Composable
+private fun LibraryHome(
+    books: List<StoryBook>,
+    recognitionSummaries: List<RecognitionSummary>,
+    filter: String,
+    onFilter: (String) -> Unit,
+    wide: Boolean,
+    onCreateBook: () -> Unit,
+    onOpenBook: (StoryBook) -> Unit,
+    onPlayBook: (StoryBook) -> Unit,
+    onContinueBook: (StoryBook) -> Unit,
+    onExport: (StoryBook) -> Unit,
+    onRename: (StoryBook, String) -> Unit,
+    onMoveToTrash: (StoryBook) -> Unit,
+) {
+    val repairBookIds = recognitionSummaries.filter { it.needsNewReference }.map { it.bookId }.toSet()
+    val visible = books.filter { book ->
+        when (filter) {
+            "已完成" -> book.status == StoryStatus.COMPLETE
+            "录制中" -> book.status == StoryStatus.IN_PROGRESS
+            "待补拍" -> book.id in repairBookIds
+            else -> true
+        }
+    }
+    val recent = books.firstOrNull(::isPlayableBook)
+    val left: @Composable () -> Unit = {
+        Column {
+            Text("留声绘本", style = MaterialTheme.typography.displayLarge, color = Ink)
+            Text("把陪伴的声音，留在每一次翻页里。", color = Ink.copy(.66f), modifier = Modifier.padding(top = 4.dp, bottom = 14.dp))
+            WarmIllustration(R.drawable.illustration_home_reading, "亲子一起阅读绘本", Modifier.fillMaxWidth().height(if (wide) 260.dp else 205.dp))
+            if (recent != null) {
+                WarmCard(Modifier.fillMaxWidth().padding(top = 14.dp)) {
+                    Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                        StoryImage(recent.spreads.firstOrNull()?.imageFile, Modifier.size(58.dp).clip(RoundedCornerShape(12.dp)))
+                        Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                            Text("随时播放", style = MaterialTheme.typography.labelMedium, color = Moss)
+                            Text(recent.title, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                        Button(onClick = { onPlayBook(recent) }, modifier = Modifier.size(48.dp), contentPadding = PaddingValues(0.dp), colors = ButtonDefaults.buttonColors(containerColor = Coral)) { Text("▶") }
+                    }
+                }
+            }
+            if (books.isEmpty()) {
+                EmptyLibraryCard()
+                WarmPrimaryButton("＋ 录下第一本绘本", onCreateBook, Modifier.fillMaxWidth().padding(top = 14.dp))
+            }
+        }
+    }
+    val shelfHeader: @Composable () -> Unit = {
+        Text("我的书架", style = MaterialTheme.typography.headlineMedium, color = Ink)
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(vertical = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf("全部", "已完成", "录制中", "待补拍").forEach { label ->
+                val selected = filter == label
+                Button(onClick = { onFilter(label) }, colors = ButtonDefaults.buttonColors(containerColor = if (selected) Moss else SoftWhite, contentColor = if (selected) Color.White else Ink), contentPadding = PaddingValues(horizontal = 15.dp, vertical = 8.dp)) { Text(label) }
+            }
+        }
+    }
+    val bookCard: @Composable (StoryBook) -> Unit = { book ->
+        BookCard(book, { onOpenBook(book) }, { onExport(book) }, { onRename(book, it) }, { onMoveToTrash(book) }, { onContinueBook(book) }, { onPlayBook(book) })
+    }
+    val padding = PaddingValues(horizontal = if (wide) 36.dp else 20.dp, vertical = 24.dp)
+    if (wide) {
+        Row(Modifier.fillMaxSize().padding(padding), horizontalArrangement = Arrangement.spacedBy(28.dp), verticalAlignment = Alignment.Top) {
+            Box(Modifier.weight(.88f)) { left() }
+            LazyColumn(Modifier.weight(1.12f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                item { shelfHeader() }
+                if (books.isNotEmpty() && visible.isEmpty()) item { Text("这里暂时没有绘本", color = Ink.copy(.58f), modifier = Modifier.padding(vertical = 28.dp)) }
+                items(visible, key = { it.id }) { bookCard(it) }
+                item { Spacer(Modifier.height(36.dp)) }
+            }
+        }
+    } else {
+        LazyColumn(Modifier.fillMaxSize(), contentPadding = padding, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            item { left(); Spacer(Modifier.height(12.dp)); shelfHeader() }
+            if (books.isNotEmpty() && visible.isEmpty()) item { Text("这里暂时没有绘本", color = Ink.copy(.58f), modifier = Modifier.padding(vertical = 28.dp)) }
+            items(visible, key = { it.id }) { bookCard(it) }
+            item { Spacer(Modifier.height(36.dp)) }
+        }
+    }
+}
+
+@Composable
+private fun LibraryMaintenance(
+    books: List<StoryBook>,
+    trashedBooks: List<StoryRepository.TrashedBook>,
+    summaries: List<RecognitionSummary>,
+    wide: Boolean,
+    archiveMessage: String?,
+    onImport: () -> Unit,
+    onImportLibrary: () -> Unit,
+    onExportLibrary: () -> Unit,
+    onClearRecognitionHistory: () -> Unit,
+    onClearMediaCache: () -> Unit,
+    onRepairRecognition: (StoryBook, String) -> Unit,
+    onRestore: (StoryRepository.TrashedBook) -> Unit,
+    onPermanentlyDelete: (StoryRepository.TrashedBook) -> Unit,
+) {
+    Text("我的", style = MaterialTheme.typography.displayLarge, color = Ink)
+    Text("备份与本机维护", color = Ink.copy(.62f), modifier = Modifier.padding(bottom = 18.dp))
+    val maintenance: @Composable () -> Unit = {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            WarmCard(Modifier.fillMaxWidth()) { Column(Modifier.padding(18.dp)) {
+                Text("本地备份", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                Text("文件只在你选择的位置读写", color = Ink.copy(.58f), style = MaterialTheme.typography.bodyMedium)
+                OutlinedButton(onClick = onImport, modifier = Modifier.fillMaxWidth().padding(top = 12.dp)) { Text("导入单本绘本") }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = onExportLibrary, modifier = Modifier.weight(1f)) { Text("导出整库") }
+                    OutlinedButton(onClick = onImportLibrary, modifier = Modifier.weight(1f)) { Text("恢复整库") }
+                }
+            } }
+            WarmCard(Modifier.fillMaxWidth()) { Column(Modifier.padding(18.dp)) {
+                Text("识别记录", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                Text("${summaries.size} 个书面有本地记录 · 不保存摄像头画面", color = Ink.copy(.62f))
+                summaries.filter { it.needsNewReference }.forEach { summary ->
+                    val book = books.firstOrNull { it.id == summary.bookId }
+                    val spread = book?.spreads?.firstOrNull { it.spreadId == summary.spreadId }
+                    if (book != null && spread != null) TextButton(onClick = { onRepairRecognition(book, spread.spreadId) }) { Text("补拍 ${book.title} · 书面 ${spread.ordinal}") }
+                }
+                TextButton(onClick = onClearRecognitionHistory) { Text("清除识别记录", color = Coral) }
+            } }
+            WarmCard(Modifier.fillMaxWidth()) { Row(Modifier.padding(18.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) { Text("媒体缓存", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold); Text("波形和缩略图可自动重建", color = Ink.copy(.58f)) }
+                OutlinedButton(onClick = onClearMediaCache) { Text("清除") }
+            } }
+            archiveMessage?.let { Text(it, color = Moss, modifier = Modifier.padding(horizontal = 6.dp)) }
+        }
+    }
+    val trash: @Composable () -> Unit = {
+        Column {
+            Text("回收站", style = MaterialTheme.typography.headlineMedium)
+            Text("保留 30 天后自动永久删除", color = Ink.copy(.58f), modifier = Modifier.padding(bottom = 10.dp))
+            if (trashedBooks.isEmpty()) Text("回收站是空的", color = Ink.copy(.55f), modifier = Modifier.padding(vertical = 18.dp))
+            trashedBooks.forEach { trashed ->
+                TrashBookCard(trashed, { onRestore(trashed) }, { onPermanentlyDelete(trashed) })
+                Spacer(Modifier.height(10.dp))
+            }
+        }
+    }
+    if (wide) Row(horizontalArrangement = Arrangement.spacedBy(24.dp), verticalAlignment = Alignment.Top) {
+        Box(Modifier.weight(1f)) { maintenance() }; Box(Modifier.weight(1f)) { trash() }
+    } else Column { maintenance(); Spacer(Modifier.height(28.dp)); trash() }
+}
+
+private fun isPlayableBook(book: StoryBook): Boolean =
+    book.status == StoryStatus.COMPLETE && book.spreads.any { it.effectiveSegments.isNotEmpty() } &&
+        book.spreads.flatMap { it.effectiveSegments }.all { it.file.isFile }
 
 @Composable
 private fun EmptyLibraryCard() {
@@ -348,6 +404,7 @@ private fun BookCard(
 ) {
     var showRename by remember { mutableStateOf(false) }
     var showDelete by remember { mutableStateOf(false) }
+    var showMenu by remember { mutableStateOf(false) }
     var title by remember(book.title) { mutableStateOf(book.title) }
     Card(
         onClick = onClick,
@@ -355,35 +412,34 @@ private fun BookCard(
         colors = CardDefaults.cardColors(containerColor = SoftWhite),
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
             StoryImage(
                 file = book.spreads.firstOrNull()?.imageFile,
-                modifier = Modifier.size(width = 104.dp, height = 78.dp).clip(RoundedCornerShape(14.dp)),
+                modifier = Modifier.size(width = 78.dp, height = 68.dp).clip(RoundedCornerShape(14.dp)),
             )
-            Column(Modifier.padding(start = 16.dp).weight(1f)) {
-                Text(book.title, style = MaterialTheme.typography.titleLarge)
+            Column(Modifier.padding(start = 12.dp).weight(1f)) {
+                Text(book.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(
-                    "${book.spreads.size} 个书面 · ${formatDuration(book.playableDurationMs)}${if (book.status == StoryStatus.IN_PROGRESS) " · 未录完" else ""}",
+                    "${book.spreads.size} 个书面 · ${formatDuration(book.playableDurationMs)}",
                     style = MaterialTheme.typography.bodyMedium,
                     color = Ink.copy(alpha = 0.62f),
-                    modifier = Modifier.padding(top = 6.dp),
+                    modifier = Modifier.padding(top = 3.dp),
                 )
-                if (book.status == StoryStatus.IN_PROGRESS) {
-                    Button(onClick = onContinue, colors = ButtonDefaults.buttonColors(containerColor = Moss)) { Text("继续录制") }
-                }
-                if (book.status == StoryStatus.COMPLETE && book.spreads.any { it.effectiveSegments.isNotEmpty() } &&
-                    book.spreads.flatMap { it.effectiveSegments }.all { it.file.isFile }) {
-                    Button(onClick = onPlay, colors = ButtonDefaults.buttonColors(containerColor = Coral)) { Text("▶ 整本播放") }
-                }
-                TextButton(onClick = onExport, contentPadding = PaddingValues(0.dp)) {
-                    Text("导出备份", style = MaterialTheme.typography.labelMedium)
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TextButton(onClick = { showRename = true }, contentPadding = PaddingValues(0.dp)) { Text("重命名") }
-                    TextButton(onClick = { showDelete = true }, contentPadding = PaddingValues(0.dp)) { Text("删除", color = Coral) }
+                Surface(color = if (book.status == StoryStatus.COMPLETE) Moss.copy(.13f) else Honey.copy(.35f), shape = CircleShape, modifier = Modifier.padding(top = 5.dp)) {
+                    Text(if (book.status == StoryStatus.COMPLETE) "已完成" else "录制中", color = if (book.status == StoryStatus.COMPLETE) Moss else Ink, style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(horizontal = 9.dp, vertical = 3.dp))
                 }
             }
-            Text("›", style = MaterialTheme.typography.headlineLarge, color = Coral)
+            if (book.status == StoryStatus.IN_PROGRESS) TextButton(onClick = onContinue, modifier = Modifier.size(48.dp), contentPadding = PaddingValues(0.dp)) { Text("续录", color = Moss, fontWeight = FontWeight.Bold) }
+            else if (isPlayableBook(book)) TextButton(onClick = onPlay, modifier = Modifier.size(48.dp), contentPadding = PaddingValues(0.dp)) { Text("▶", color = Coral, style = MaterialTheme.typography.titleLarge) }
+            Box {
+                TextButton(onClick = { showMenu = true }, modifier = Modifier.size(48.dp), contentPadding = PaddingValues(0.dp)) { Text("⋮", style = MaterialTheme.typography.headlineMedium, color = Ink) }
+                DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                    DropdownMenuItem(text = { Text("打开详情") }, onClick = { showMenu = false; onClick() })
+                    DropdownMenuItem(text = { Text("导出备份") }, onClick = { showMenu = false; onExport() })
+                    DropdownMenuItem(text = { Text("重命名") }, onClick = { showMenu = false; showRename = true })
+                    DropdownMenuItem(text = { Text("移到回收站", color = Coral) }, onClick = { showMenu = false; showDelete = true })
+                }
+            }
         }
     }
     if (showRename) AlertDialog(
@@ -466,6 +522,11 @@ fun SetupScreen(
                 style = MaterialTheme.typography.bodyLarge,
                 color = Ink.copy(alpha = 0.7f),
                 modifier = Modifier.padding(top = 12.dp),
+            )
+            WarmIllustration(
+                R.drawable.illustration_setup_book,
+                "准备固定手机和绘本",
+                Modifier.fillMaxWidth().height(210.dp).padding(top = 18.dp),
             )
 
             OutlinedTextField(
@@ -948,7 +1009,7 @@ fun RecordingScreen(
 
     Surface(Modifier.fillMaxSize(), color = Ink) {
         Column(Modifier.fillMaxSize()) {
-            Box(Modifier.fillMaxWidth().aspectRatio(1.32f)) {
+            Box(Modifier.fillMaxWidth().weight(1.1f)) {
                 if (controller != null) {
                     AndroidView(
                         factory = { viewContext ->
@@ -983,8 +1044,15 @@ fun RecordingScreen(
                 }
             }
 
-            Surface(color = Paper, shape = RoundedCornerShape(topStart = 30.dp, topEnd = 30.dp)) {
-                Column(Modifier.padding(22.dp)) {
+            Surface(
+                modifier = Modifier.weight(.9f),
+                color = Paper,
+                shape = RoundedCornerShape(topStart = 30.dp, topEnd = 30.dp),
+            ) {
+                Column(
+                    Modifier.fillMaxSize().verticalScroll(rememberScrollState())
+                        .navigationBarsPadding().padding(22.dp),
+                ) {
                     Text(captureMessage, style = MaterialTheme.typography.titleLarge)
                     Text(
                         if (mode == RecordingMode.MANUAL && isRecording) "读完当前书面并翻页后，按“下一书面”。"
@@ -1058,6 +1126,14 @@ fun RecordingScreen(
                             modifier = Modifier.padding(top = 10.dp),
                         )
                     } else {
+                        if (phase == RecordingPhase.PAUSED) {
+                            WarmIllustration(
+                                R.drawable.illustration_recording_pause,
+                                "录制已暂停并安全保存",
+                                Modifier.fillMaxWidth().height(150.dp).padding(top = 10.dp),
+                            )
+                            Text("录音已安全保存。你可以继续、完成，或先返回书架。", color = Moss, modifier = Modifier.padding(top = 10.dp))
+                        }
                         Button(
                             onClick = {
                                 detector.reset()

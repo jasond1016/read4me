@@ -32,6 +32,7 @@ import com.read4me.app.ui.SetupScreen
 import com.read4me.app.ui.StoryImageLoader
 import com.read4me.app.ui.ChildReadingScreen
 import com.read4me.app.ui.AudioBookPlayerScreen
+import com.read4me.app.ui.CompletionSummaryScreen
 import com.read4me.app.vision.RecognitionHistoryStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -45,6 +46,8 @@ class RecordingRecoveryViewModel : ViewModel() {
 
 class MainActivity : ComponentActivity() {
     private sealed interface Destination {
+        enum class AudioBookReturn { LIBRARY, REVIEW, COMPLETION_SUMMARY }
+
         data object Library : Destination
         data object Setup : Destination
         data object ChildReading : Destination
@@ -59,7 +62,8 @@ class MainActivity : ComponentActivity() {
             val organizeCurrent: String? = null,
             val organizeImages: List<java.io.File> = emptyList(),
         ) : Destination
-        data class AudioBook(val book: StoryBook, val returnToReview: Boolean) : Destination
+        data class AudioBook(val book: StoryBook, val returnTo: AudioBookReturn) : Destination
+        data class CompletionSummary(val book: StoryBook) : Destination
         data class Rerecord(val book: StoryBook, val spreadId: String) : Destination
         data class Recapture(
             val book: StoryBook,
@@ -219,7 +223,7 @@ class MainActivity : ComponentActivity() {
                             }
                         },
                         onOpenBook = { destination = Destination.Review(it) },
-                        onPlayBook = { destination = Destination.AudioBook(it, returnToReview = false) },
+                        onPlayBook = { destination = Destination.AudioBook(it, Destination.AudioBookReturn.LIBRARY) },
                         onContinueBook = { book ->
                             val mode = book.recordingMode
                             val target = Destination.Recording(book, mode)
@@ -336,8 +340,19 @@ class MainActivity : ComponentActivity() {
                         onFinished = { book ->
                             books = repository.loadAll()
                             trashedBooks = repository.loadTrash()
-                            destination = Destination.Review(book)
+                            destination = Destination.CompletionSummary(book)
                         },
+                    )
+
+                    is Destination.CompletionSummary -> CompletionSummaryScreen(
+                        book = current.book,
+                        onPlay = {
+                            destination = Destination.AudioBook(
+                                current.book,
+                                Destination.AudioBookReturn.COMPLETION_SUMMARY,
+                            )
+                        },
+                        onReview = { destination = Destination.Review(current.book) },
                     )
 
                     is Destination.Review -> ReviewScreen(
@@ -389,7 +404,7 @@ class MainActivity : ComponentActivity() {
                                 permissionLauncher.launch(arrayOf(Manifest.permission.CAMERA))
                             }
                         },
-                        onPlayBook = { destination = Destination.AudioBook(it, returnToReview = true) },
+                        onPlayBook = { destination = Destination.AudioBook(it, Destination.AudioBookReturn.REVIEW) },
                         initialUndo = current.initialUndo,
                         initialUndoImage = current.undoImage,
                         initialUndoImages = current.undoImages,
@@ -406,7 +421,11 @@ class MainActivity : ComponentActivity() {
                     is Destination.AudioBook -> AudioBookPlayerScreen(
                         book = current.book,
                         onBack = {
-                            destination = if (current.returnToReview) Destination.Review(current.book) else Destination.Library
+                            destination = when (current.returnTo) {
+                                Destination.AudioBookReturn.LIBRARY -> Destination.Library
+                                Destination.AudioBookReturn.REVIEW -> Destination.Review(current.book)
+                                Destination.AudioBookReturn.COMPLETION_SUMMARY -> Destination.CompletionSummary(current.book)
+                            }
                         },
                     )
 
