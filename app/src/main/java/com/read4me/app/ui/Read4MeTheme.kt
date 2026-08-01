@@ -9,24 +9,24 @@ import androidx.compose.material3.Typography
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.sp
 
-val Paper = Color(0xFFF6F0E5)
-val Ink = Color(0xFF302D29)
-val Coral = Color(0xFFD9654F)
-val Moss = Color(0xFF526B57)
-val Honey = Color(0xFFF1C56F)
-val SoftWhite = Color(0xFFFFFBF4)
+val Paper = Color(0xFFFFF9EF)
+val Ink = Color(0xFF49352A)
+val Coral = Color(0xFFD9604C)
+val Moss = Color(0xFF64745B)
+val Honey = Color(0xFFE8A936)
+val SoftWhite = Color(0xFFFFFEFB)
 
 private val Read4MeColors = lightColorScheme(
-    primary = Coral,
-    onPrimary = Color.White,
+    primary = Honey,
+    onPrimary = Ink,
     secondary = Moss,
     onSecondary = Color.White,
     background = Paper,
     onBackground = Ink,
     surface = SoftWhite,
     onSurface = Ink,
-    surfaceVariant = Color(0xFFE9DFD0),
-    outline = Color(0xFF8C8173),
+    surfaceVariant = Color(0xFFF2E7D7),
+    outline = Color(0xFF8B7667),
 )
 
 private val Read4MeTypography = Typography(
