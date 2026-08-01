@@ -219,12 +219,11 @@ fun AudioBookPlayerScreen(
                     color = Moss,
                     modifier = Modifier.padding(top = 14.dp),
                 )
-                Text(if (playing) "正在播放  ·|▮|·|▮|·" else "已暂停", color = Honey, modifier = Modifier.padding(top = 4.dp))
                 Slider(
                     value = progress.coerceIn(0f, 1f),
                     onValueChange = { seekBook((it * plan.durationMs).toLong()) },
                     colors = SliderDefaults.colors(thumbColor = Moss, activeTrackColor = Honey, inactiveTrackColor = WarmLine),
-                    modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                 )
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text(formatAudioTime(wholePosition), color = Moss)
