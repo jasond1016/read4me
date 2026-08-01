@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -105,7 +106,7 @@ fun AudioBookPlayerScreen(book: StoryBook, onBack: () -> Unit) {
         })
     }
 
-    Surface(Modifier.fillMaxSize(), color = Paper) {
+    Surface(Modifier.fillMaxSize(), color = WarmPaper) {
         Column(Modifier.fillMaxSize()) {
             Surface(color = androidx.compose.ui.graphics.Color.White, shadowElevation = 4.dp) {
                 Row(
@@ -123,10 +124,16 @@ fun AudioBookPlayerScreen(book: StoryBook, onBack: () -> Unit) {
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(24.dp),
             ) {
-                Text("纯音频播放", color = Coral, fontWeight = FontWeight.Bold)
+                Text("正在陪你读", color = WarmCoral, fontWeight = FontWeight.Bold)
                 Text(book.title, style = MaterialTheme.typography.headlineLarge, color = Ink, maxLines = 2)
                 Text("书面 ${(entry?.spreadIndex ?: 0) + 1} / ${plan.spreadCount}", style = MaterialTheme.typography.titleLarge, color = Moss)
-                LinearProgressIndicator(progress = { progress.coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth().height(8.dp), color = Coral)
+                WarmCard(Modifier.fillMaxWidth()) {
+                    StoryImage(
+                        file = book.spreads.getOrNull(entry?.spreadIndex ?: 0)?.imageFile,
+                        modifier = Modifier.fillMaxWidth().aspectRatio(1.32f).padding(10.dp),
+                    )
+                }
+                LinearProgressIndicator(progress = { progress.coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth().height(8.dp), color = WarmCoral)
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text(formatAudioTime(wholePosition), color = Ink.copy(alpha = .65f))
                     Text(formatAudioTime(plan.durationMs), color = Ink.copy(alpha = .65f))
