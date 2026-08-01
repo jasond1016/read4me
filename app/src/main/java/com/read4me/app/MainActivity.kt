@@ -1,6 +1,7 @@
 package com.read4me.app
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -14,6 +15,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.read4me.app.data.StoryRepository
@@ -118,7 +120,6 @@ class MainActivity : ComponentActivity() {
                 var pendingRecording by remember { mutableStateOf<Pair<String, RecordingMode>?>(null) }
                 var permissionMessage by remember { mutableStateOf<String?>(null) }
                 var archiveMessage by remember { mutableStateOf<String?>(null) }
-                var exportBook by remember { mutableStateOf<StoryBook?>(null) }
                 val scope = rememberCoroutineScope()
 
                 val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -132,21 +133,6 @@ class MainActivity : ComponentActivity() {
                             books = refreshed
                             "绘本已导入"
                         }.getOrElse { "导入失败：${it.message ?: "备份文件无效"}" }
-                    }
-                }
-                val exportLauncher = rememberLauncherForActivityResult(
-                    ActivityResultContracts.CreateDocument("application/zip"),
-                ) { uri ->
-                    val book = exportBook
-                    exportBook = null
-                    if (uri != null && book != null) scope.launch {
-                        archiveMessage = runCatching {
-                            withContext(Dispatchers.IO) {
-                                contentResolver.openOutputStream(uri)?.use { repository.export(book, it) }
-                                    ?: error("Cannot create the backup")
-                            }
-                            "绘本备份已导出"
-                        }.getOrElse { "导出失败：${it.message ?: "无法写入文件"}" }
                     }
                 }
                 val libraryImportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -240,9 +226,35 @@ class MainActivity : ComponentActivity() {
                         archiveMessage = archiveMessage,
                         onImport = { importLauncher.launch(arrayOf("application/zip", "application/octet-stream")) },
                         onExport = { book ->
-                            exportBook = book
-                            val safeTitle = book.title.replace(Regex("[^A-Za-z0-9._-]"), "_").take(40)
-                            exportLauncher.launch("${safeTitle.ifBlank { "book" }}.read4me")
+                            scope.launch {
+                                archiveMessage = runCatching {
+                                    val shareFile = withContext(Dispatchers.IO) {
+                                        val directory = java.io.File(cacheDir, "read4me-shares").apply { mkdirs() }
+                                        directory.listFiles()?.forEach { it.delete() }
+                                        val safeTitle = book.title.replace(Regex("[\\/:*?\"<>|]"), "_").take(40)
+                                        java.io.File(directory, "${safeTitle.ifBlank { "book" }}.read4me").also { file ->
+                                            file.outputStream().use { repository.export(book, it) }
+                                        }
+                                    }
+                                    val uri = FileProvider.getUriForFile(
+                                        this@MainActivity,
+                                        "$packageName.fileprovider",
+                                        shareFile,
+                                    )
+                                    startActivity(
+                                        Intent.createChooser(
+                                            Intent(Intent.ACTION_SEND).apply {
+                                                type = "application/octet-stream"
+                                                putExtra(Intent.EXTRA_STREAM, uri)
+                                                putExtra(Intent.EXTRA_TITLE, shareFile.name)
+                                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                            },
+                                            "分享给家人",
+                                        ),
+                                    )
+                                    "已准备分享 ${book.title}"
+                                }.getOrElse { "分享失败：${it.message ?: "无法创建绘本文件"}" }
+                            }
                         },
                         onRename = { book, title ->
                             archiveMessage = runCatching {

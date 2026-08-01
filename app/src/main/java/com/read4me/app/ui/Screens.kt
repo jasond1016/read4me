@@ -435,7 +435,7 @@ private fun BookCard(
                 TextButton(onClick = { showMenu = true }, modifier = Modifier.size(48.dp), contentPadding = PaddingValues(0.dp)) { Text("⋮", style = MaterialTheme.typography.headlineMedium, color = Ink) }
                 DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
                     DropdownMenuItem(text = { Text("打开详情") }, onClick = { showMenu = false; onClick() })
-                    DropdownMenuItem(text = { Text("导出备份") }, onClick = { showMenu = false; onExport() })
+                    DropdownMenuItem(text = { Text("分享给家人") }, onClick = { showMenu = false; onExport() })
                     DropdownMenuItem(text = { Text("重命名") }, onClick = { showMenu = false; showRename = true })
                     DropdownMenuItem(text = { Text("移到回收站", color = Coral) }, onClick = { showMenu = false; showDelete = true })
                 }
