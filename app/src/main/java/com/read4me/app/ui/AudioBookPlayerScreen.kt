@@ -55,6 +55,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
@@ -285,8 +286,16 @@ private fun RoundPlayerButton(icon: Int, description: String, size: Int, onClick
         modifier = Modifier.size(size.dp).clickable(onClick = onClick),
         shape = CircleShape, color = SoftWhite, shadowElevation = 3.dp,
     ) { Box(contentAlignment = Alignment.Center) {
-        AppIcon(icon, description, tint = Ink)
-        badge?.let { Text(it, color = Ink, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold) }
+        AppIcon(icon, description, tint = Ink, size = if (badge == null) 24.dp else 34.dp)
+        badge?.let {
+            Text(
+                it,
+                color = Ink,
+                style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, lineHeight = 9.sp),
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.background(SoftWhite, CircleShape).padding(horizontal = 2.dp, vertical = 1.dp),
+            )
+        }
     } }
 }
 
