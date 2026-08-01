@@ -156,8 +156,8 @@ fun AudioBookPlayerScreen(book: StoryBook, onBack: () -> Unit) {
                         StoryImage(spread?.imageFile, Modifier.fillMaxSize())
                         Surface(
                             color = SoftWhite.copy(alpha = .9f), shape = CircleShape,
-                            modifier = Modifier.align(Alignment.BottomEnd).padding(12.dp).size(38.dp),
-                        ) { Box(contentAlignment = Alignment.Center) { Text("↗", color = Ink) } }
+                            modifier = Modifier.align(Alignment.BottomEnd).padding(12.dp).size(48.dp),
+                        ) { Box(contentAlignment = Alignment.Center) { AppIcon(AppIcons.Fullscreen, "全屏查看", tint = Ink) } }
                     }
                 }
                 Text(
@@ -182,15 +182,15 @@ fun AudioBookPlayerScreen(book: StoryBook, onBack: () -> Unit) {
                     horizontalArrangement = Arrangement.SpaceEvenly,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    RoundPlayerButton("↶\n15", 52, { seekBook(wholePosition - 15_000) })
-                    RoundPlayerButton("|◀", 52, { controller?.seekToPreviousMediaItem() })
+                    RoundPlayerButton(AppIcons.Replay, "后退 15 秒", 52, { seekBook(wholePosition - 15_000) }, "15")
+                    RoundPlayerButton(AppIcons.Previous, "上一书面", 52, { controller?.seekToPreviousMediaItem() })
                     Button(
                         onClick = { controller?.let { if (it.isPlaying) it.pause() else it.play() } },
                         modifier = Modifier.size(68.dp), shape = CircleShape, contentPadding = PaddingValues(0.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = Honey, contentColor = Color.White),
-                    ) { Text(if (playing) "Ⅱ" else "▶", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold) }
-                    RoundPlayerButton("▶|", 52, { controller?.seekToNextMediaItem() })
-                    RoundPlayerButton("↷\n15", 52, { seekBook(wholePosition + 15_000) })
+                    ) { AppIcon(if (playing) AppIcons.Pause else AppIcons.Play, if (playing) "暂停" else "播放", tint = Color.White, size = 36.dp) }
+                    RoundPlayerButton(AppIcons.Next, "下一书面", 52, { controller?.seekToNextMediaItem() })
+                    RoundPlayerButton(AppIcons.ForwardMedia, "前进 15 秒", 52, { seekBook(wholePosition + 15_000) }, "15")
                 }
 
                 PlayerPanel(
@@ -229,23 +229,22 @@ private fun PlayerTopBar(title: String, onBack: () -> Unit, onMore: () -> Unit) 
         Modifier.fillMaxWidth().statusBarsPadding().height(64.dp).padding(horizontal = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        TextButton(onClick = onBack, modifier = Modifier.size(52.dp), contentPadding = PaddingValues(0.dp)) {
-            Text("‹", style = MaterialTheme.typography.headlineLarge, color = Ink)
-        }
+        AppIconButton(AppIcons.Back, "返回", onBack, Modifier.size(52.dp), tint = Ink)
         Text(title, style = MaterialTheme.typography.titleLarge, color = Ink, fontWeight = FontWeight.Bold,
             textAlign = TextAlign.Center, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-        TextButton(onClick = onMore, modifier = Modifier.size(52.dp), contentPadding = PaddingValues(0.dp)) {
-            Text("•••", color = Ink.copy(.7f), textAlign = TextAlign.Center)
-        }
+        AppIconButton(AppIcons.More, "更多播放控制", onMore, Modifier.size(52.dp), tint = Ink.copy(.7f))
     }
 }
 
 @Composable
-private fun RoundPlayerButton(label: String, size: Int, onClick: () -> Unit) {
+private fun RoundPlayerButton(icon: Int, description: String, size: Int, onClick: () -> Unit, badge: String? = null) {
     Surface(
         modifier = Modifier.size(size.dp).clickable(onClick = onClick),
         shape = CircleShape, color = SoftWhite, shadowElevation = 3.dp,
-    ) { Box(contentAlignment = Alignment.Center) { Text(label, color = Ink, textAlign = TextAlign.Center, fontWeight = FontWeight.Bold) } }
+    ) { Box(contentAlignment = Alignment.Center) {
+        AppIcon(icon, description, tint = Ink)
+        badge?.let { Text(it, color = Ink, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold) }
+    } }
 }
 
 @Composable
@@ -266,13 +265,14 @@ private fun PlayerPanel(
     ) {
         Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                PanelAction("◉", "从头播放", onRestart, Modifier.weight(1f))
-                PanelAction("☷", "书面列表", onPages, Modifier.weight(1f))
-                PanelAction("◷", sleepMode?.let(::sleepLabel) ?: "定时关闭", onTimer, Modifier.weight(1f))
-                PanelAction("${speedLabel(speed)}x", "倍速播放", onSpeed, Modifier.weight(1f))
+                PanelAction(AppIcons.Restart, "从头播放", onRestart, Modifier.weight(1f))
+                PanelAction(AppIcons.List, "书面列表", onPages, Modifier.weight(1f))
+                PanelAction(AppIcons.Timer, sleepMode?.let(::sleepLabel) ?: "定时关闭", onTimer, Modifier.weight(1f))
+                PanelAction(AppIcons.Speed, "${speedLabel(speed)}x 倍速", onSpeed, Modifier.weight(1f))
             }
             TextButton(onClick = onToggle, modifier = Modifier.align(Alignment.CenterHorizontally)) {
-                Text(if (expanded) "⌃  收起控制面板" else "⌄  展开控制面板", color = Ink.copy(.62f))
+                AppIcon(if (expanded) AppIcons.ExpandLess else AppIcons.ExpandMore, null, tint = Ink.copy(.62f))
+                Text(if (expanded) "收起控制面板" else "展开控制面板", color = Ink.copy(.62f), modifier = Modifier.padding(start = 4.dp))
             }
             if (expanded) {
                 Text("睡眠定时", style = MaterialTheme.typography.titleMedium, color = Ink, fontWeight = FontWeight.Bold,
@@ -294,10 +294,10 @@ private fun PlayerPanel(
 }
 
 @Composable
-private fun PanelAction(icon: String, label: String, onClick: () -> Unit, modifier: Modifier) {
+private fun PanelAction(icon: Int, label: String, onClick: () -> Unit, modifier: Modifier) {
     Surface(modifier.clickable(onClick = onClick), shape = RoundedCornerShape(16.dp), color = WarmPaper) {
         Column(Modifier.padding(vertical = 11.dp, horizontal = 2.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(icon, style = MaterialTheme.typography.titleMedium, color = Ink)
+            AppIcon(icon, null, tint = Ink)
             Text(label, style = MaterialTheme.typography.labelSmall, color = Ink, maxLines = 1)
         }
     }

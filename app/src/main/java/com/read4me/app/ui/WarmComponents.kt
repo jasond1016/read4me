@@ -51,13 +51,16 @@ fun WarmCard(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
 }
 
 @Composable
-fun WarmPrimaryButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
+fun WarmPrimaryButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, icon: Int? = null) {
     Button(
         onClick = onClick,
         modifier = modifier.height(56.dp),
         shape = RoundedCornerShape(18.dp),
         colors = ButtonDefaults.buttonColors(containerColor = WarmAmber, contentColor = WarmBrown),
-    ) { Text(text, fontWeight = FontWeight.Bold) }
+    ) {
+        icon?.let { AppIcon(it, null, tint = WarmBrown, size = 28.dp) }
+        Text(text, fontWeight = FontWeight.Bold, modifier = if (icon == null) Modifier else Modifier.padding(start = 8.dp))
+    }
 }
 
 @Composable
@@ -66,7 +69,12 @@ fun WarmTopBar(title: String, onBack: (() -> Unit)? = null) {
         Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (onBack != null) TextButton(onClick = onBack) { Text("‹ 返回", color = WarmMoss) }
+        if (onBack != null) {
+            TextButton(onClick = onBack) {
+                AppIcon(AppIcons.Back, null, tint = WarmMoss)
+                Text("返回", color = WarmMoss, modifier = Modifier.padding(start = 4.dp))
+            }
+        }
         Text(title, style = MaterialTheme.typography.titleLarge, color = WarmBrown, fontWeight = FontWeight.Bold)
     }
 }
@@ -92,10 +100,10 @@ fun WarmBottomShell(selected: WarmShellTab, modifier: Modifier = Modifier, onSel
             verticalAlignment = Alignment.CenterVertically,
         ) {
             listOf(
-                Triple(WarmShellTab.LIBRARY, "▤", "书架"),
-                Triple(WarmShellTab.READING, "◉", "陪读"),
-                Triple(WarmShellTab.RECORD, "＋", "录制"),
-                Triple(WarmShellTab.ME, "⌂", "我的"),
+                Triple(WarmShellTab.LIBRARY, AppIcons.Library, "书架"),
+                Triple(WarmShellTab.READING, AppIcons.Reading, "陪读"),
+                Triple(WarmShellTab.RECORD, AppIcons.Add, "录制"),
+                Triple(WarmShellTab.ME, AppIcons.Home, "我的"),
             ).forEach { (tab, glyph, label) ->
                 val active = selected == tab
                 TextButton(
@@ -113,7 +121,14 @@ fun WarmBottomShell(selected: WarmShellTab, modifier: Modifier = Modifier, onSel
                                 ),
                             ),
                             contentAlignment = Alignment.Center,
-                        ) { Text(glyph, color = if (tab == WarmShellTab.RECORD) Color.White else if (active) WarmCoral else WarmBrown.copy(.58f), fontWeight = FontWeight.Bold) }
+                        ) {
+                            AppIcon(
+                                glyph,
+                                contentDescription = null,
+                                tint = if (tab == WarmShellTab.RECORD) Color.White else if (active) WarmCoral else WarmBrown.copy(.58f),
+                                size = if (tab == WarmShellTab.RECORD) 32.dp else 24.dp,
+                            )
+                        }
                         Text(label, color = if (active || tab == WarmShellTab.RECORD) WarmCoral else WarmBrown.copy(.62f), style = MaterialTheme.typography.labelSmall, fontWeight = if (active) FontWeight.Bold else FontWeight.Normal)
                     }
                 }

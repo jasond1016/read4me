@@ -398,9 +398,7 @@ private fun ReviewTopBar(
                         Text("整本播放", color = Coral, fontWeight = FontWeight.Bold)
                     }
                 Box {
-                    TextButton(onClick = { menuExpanded = true }) {
-                        Text("⋮", color = Moss, style = MaterialTheme.typography.headlineSmall)
-                    }
+                    AppIconButton(AppIcons.More, "更多整理操作", { menuExpanded = true }, tint = Moss)
                     DropdownMenu(
                         expanded = menuExpanded,
                         onDismissRequest = { menuExpanded = false },
@@ -514,14 +512,19 @@ private fun Playback(
         )
         Row(Modifier.fillMaxWidth(), Arrangement.SpaceEvenly, Alignment.CenterVertically) {
             TextButton(enabled = i > 0, onClick = { choose(book.spreads[i - 1].spreadId) }) {
-                Text("‹ 上一书面")
+                AppIcon(AppIcons.Back, null)
+                Text("上一书面", modifier = Modifier.padding(start = 4.dp))
             }
-            Button(onClick = play, shape = CircleShape) { Text(if (playing) "停止" else "▶ 播放") }
+            Button(onClick = play, shape = CircleShape) {
+                AppIcon(if (playing) AppIcons.Pause else AppIcons.Play, null, size = 28.dp)
+                Text(if (playing) "停止" else "播放", modifier = Modifier.padding(start = 4.dp))
+            }
             TextButton(
                 enabled = i < book.spreads.lastIndex,
                 onClick = { choose(book.spreads[i + 1].spreadId) },
             ) {
-                Text("下一书面 ›")
+                Text("下一书面", modifier = Modifier.padding(end = 4.dp))
+                AppIcon(AppIcons.Forward, null)
             }
         }
     }
@@ -603,7 +606,8 @@ private fun AudioEditor(
             Text("试听修剪结果")
         }
         TextButton(onClick = onMore, modifier = Modifier.fillMaxWidth()) {
-            Text(if (more) "收起音频操作 −" else "更多音频操作 ＋")
+            AppIcon(if (more) AppIcons.ExpandLess else AppIcons.ExpandMore, null)
+            Text(if (more) "收起音频操作" else "更多音频操作", modifier = Modifier.padding(start = 4.dp))
         }
         if (more) {
             if (!ignored && suggestion != null)
@@ -671,7 +675,7 @@ private fun AudioEditor(
                     modifier = Modifier.weight(1f),
                     color = if (s.references.isEmpty()) Coral else Ink,
                 )
-                Text("›")
+                AppIcon(AppIcons.Forward, "打开参考图")
             }
         }
     }
@@ -806,7 +810,7 @@ private fun OrganizePane(
                             Modifier.padding(8.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Text("≡")
+                            AppIcon(AppIcons.Drag, null)
                             StoryImage(
                                 x.imageFile,
                                 Modifier.padding(horizontal = 8.dp)

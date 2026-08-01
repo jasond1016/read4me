@@ -243,13 +243,13 @@ private fun LibraryHome(
                             Text("随时播放", style = MaterialTheme.typography.labelMedium, color = Moss)
                             Text(recent.title, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
-                        Button(onClick = { onPlayBook(recent) }, modifier = Modifier.size(48.dp), contentPadding = PaddingValues(0.dp), colors = ButtonDefaults.buttonColors(containerColor = Coral)) { Text("▶") }
+                        Button(onClick = { onPlayBook(recent) }, modifier = Modifier.size(48.dp), contentPadding = PaddingValues(0.dp), colors = ButtonDefaults.buttonColors(containerColor = Coral)) { AppIcon(AppIcons.Play, "播放绘本", tint = Color.White, size = 28.dp) }
                     }
                 }
             }
             if (books.isEmpty()) {
                 EmptyLibraryCard()
-                WarmPrimaryButton("＋ 录下第一本绘本", onCreateBook, Modifier.fillMaxWidth().padding(top = 14.dp))
+                WarmPrimaryButton("录下第一本绘本", onCreateBook, Modifier.fillMaxWidth().padding(top = 14.dp), AppIcons.Add)
             }
         }
     }
@@ -430,9 +430,9 @@ private fun BookCard(
                 }
             }
             if (book.status == StoryStatus.IN_PROGRESS) TextButton(onClick = onContinue, modifier = Modifier.size(48.dp), contentPadding = PaddingValues(0.dp)) { Text("续录", color = Moss, fontWeight = FontWeight.Bold) }
-            else if (isPlayableBook(book)) TextButton(onClick = onPlay, modifier = Modifier.size(48.dp), contentPadding = PaddingValues(0.dp)) { Text("▶", color = Coral, style = MaterialTheme.typography.titleLarge) }
+            else if (isPlayableBook(book)) AppIconButton(AppIcons.Play, "播放${book.title}", onPlay, Modifier.size(48.dp), tint = Coral, iconSize = 28.dp)
             Box {
-                TextButton(onClick = { showMenu = true }, modifier = Modifier.size(48.dp), contentPadding = PaddingValues(0.dp)) { Text("⋮", style = MaterialTheme.typography.headlineMedium, color = Ink) }
+                AppIconButton(AppIcons.More, "更多操作", { showMenu = true }, Modifier.size(48.dp), tint = Ink)
                 DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
                     DropdownMenuItem(text = { Text("打开详情") }, onClick = { showMenu = false; onClick() })
                     DropdownMenuItem(text = { Text("分享给家人") }, onClick = { showMenu = false; onExport() })
@@ -514,7 +514,8 @@ fun SetupScreen(
                 contentPadding = PaddingValues(0.dp),
                 modifier = Modifier.padding(bottom = 18.dp),
             ) {
-                Text("‹ 返回", color = Moss)
+                AppIcon(AppIcons.Back, null, tint = Moss)
+                Text("返回", color = Moss, modifier = Modifier.padding(start = 4.dp))
             }
             Text("准备第一次陪读", style = MaterialTheme.typography.headlineLarge)
             Text(
@@ -654,14 +655,14 @@ private fun ChildReadingStatus(
         ChildReadingPhase.NO_BOOKS,
         ChildReadingPhase.LOOKING -> Ink.copy(alpha = 0.5f)
     }
-    val symbol = when (phase) {
-        ChildReadingPhase.PLAYING -> "♪"
-        ChildReadingPhase.FINISHED -> "↪"
-        ChildReadingPhase.MOVED -> "↩"
-        ChildReadingPhase.PAUSED -> "Ⅱ"
-        ChildReadingPhase.CONFIRMING -> "…"
-        ChildReadingPhase.NO_BOOKS -> "!"
-        ChildReadingPhase.LOOKING -> "⌖"
+    val statusIcon = when (phase) {
+        ChildReadingPhase.PLAYING -> AppIcons.Play
+        ChildReadingPhase.FINISHED -> AppIcons.Restart
+        ChildReadingPhase.MOVED -> AppIcons.Reading
+        ChildReadingPhase.PAUSED -> AppIcons.Pause
+        ChildReadingPhase.CONFIRMING -> AppIcons.More
+        ChildReadingPhase.NO_BOOKS -> AppIcons.Library
+        ChildReadingPhase.LOOKING -> AppIcons.Fullscreen
     }
 
     Row(
@@ -684,10 +685,11 @@ private fun ChildReadingStatus(
                         .graphicsLayer { alpha = if (phase == ChildReadingPhase.MOVED) 0.55f else 1f },
                 )
             } else {
-                Text(
-                    symbol,
-                    color = accent,
-                    style = MaterialTheme.typography.headlineLarge,
+                AppIcon(
+                    statusIcon,
+                    contentDescription = null,
+                    tint = accent,
+                    size = 32.dp,
                     modifier = Modifier.graphicsLayer {
                         val scale = if (phase == ChildReadingPhase.PLAYING) pulseScale else 1f
                         scaleX = scale
@@ -702,10 +704,11 @@ private fun ChildReadingStatus(
                     modifier = Modifier.align(Alignment.BottomEnd).padding(5.dp).size(28.dp),
                 ) {
                     Box(contentAlignment = Alignment.Center) {
-                        Text(
-                            symbol,
-                            color = Color.White,
-                            style = MaterialTheme.typography.titleMedium,
+                        AppIcon(
+                            statusIcon,
+                            contentDescription = null,
+                            tint = Color.White,
+                            size = 18.dp,
                             modifier = Modifier.graphicsLayer {
                                 val scale = if (phase == ChildReadingPhase.PLAYING) pulseScale else 1f
                                 scaleX = scale
@@ -1538,7 +1541,7 @@ fun ChildReadingScreen(
             )
 
             Text(
-                "← 返回书架",
+                "返回书架",
                 color = Color.White,
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.Bold,
@@ -1592,13 +1595,17 @@ fun ChildReadingScreen(
                                 modifier = Modifier.weight(1f).height(64.dp),
                                 shape = RoundedCornerShape(20.dp),
                             ) {
+                                if (readingPhase != ChildReadingPhase.MOVED) {
+                                    AppIcon(if (isPlaying) AppIcons.Pause else AppIcons.Play, null, size = 28.dp)
+                                }
                                 Text(
                                     when {
-                                        isPlaying -> "Ⅱ  暂停一下"
-                                        readingPhase == ChildReadingPhase.PAUSED -> "▶  继续听"
+                                        isPlaying -> "暂停一下"
+                                        readingPhase == ChildReadingPhase.PAUSED -> "继续听"
                                         readingPhase == ChildReadingPhase.MOVED -> "放回书面"
-                                        else -> "▶  再听一次"
+                                        else -> "再听一次"
                                     },
+                                    modifier = if (readingPhase == ChildReadingPhase.MOVED) Modifier else Modifier.padding(start = 6.dp),
                                 )
                             }
                             Button(
@@ -1607,7 +1614,10 @@ fun ChildReadingScreen(
                                 modifier = Modifier.weight(1f).height(64.dp),
                                 shape = RoundedCornerShape(20.dp),
                                 colors = ButtonDefaults.buttonColors(containerColor = Moss),
-                            ) { Text("↻  从头听") }
+                            ) {
+                                AppIcon(AppIcons.Restart, null)
+                                Text("从头听", modifier = Modifier.padding(start = 6.dp))
+                            }
                         }
                     }
                 }
