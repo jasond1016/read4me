@@ -75,6 +75,8 @@ import kotlinx.coroutines.withContext
 fun ReviewScreen(
     book: StoryBook,
     repository: StoryRepository,
+    initialSelectedSpreadId: String? = null,
+    returnActionLabel: String? = null,
     onRerecord: (StoryBook, String) -> Unit,
     onRecapture: (StoryBook, String, StoryBook?, File?) -> Unit,
     onBatchRecapture: (StoryBook, List<String>) -> Unit,
@@ -102,7 +104,8 @@ fun ReviewScreen(
             mutableStateOf(
                 initialOrganizeCurrent?.takeIf { id ->
                     initialOrganizeDraft?.markers?.any { it.spreadId == id } == true
-                } ?: book.resumeSpreadId ?: book.markers.firstOrNull()?.spreadId.orEmpty(),
+                } ?: initialSelectedSpreadId?.takeIf { id -> book.markers.any { it.spreadId == id } }
+                    ?: book.resumeSpreadId ?: book.markers.firstOrNull()?.spreadId.orEmpty(),
             )
         }
     var playingId by remember { mutableStateOf<String?>(null) }
@@ -182,6 +185,8 @@ fun ReviewScreen(
                 draft != null,
                 session.canUndo,
                 ::leave,
+                returnActionLabel,
+                selected?.ordinal,
                 onPlayBook = {
                     stop()
                     onPlayBook(current)
@@ -273,6 +278,7 @@ fun ReviewScreen(
                     waveform,
                     playhead,
                     more,
+                    returnActionLabel != null,
                     { more = !more },
                     ::choose,
                     play = { a, b ->
@@ -357,6 +363,8 @@ private fun ReviewTopBar(
     organizing: Boolean,
     canUndo: Boolean,
     back: () -> Unit,
+    returnActionLabel: String?,
+    focusedPage: Int?,
     onPlayBook: () -> Unit,
     batchRecapture: () -> Unit,
     undo: () -> Unit,
@@ -384,20 +392,26 @@ private fun ReviewTopBar(
                     Text("完成", color = Color.White, fontWeight = FontWeight.Bold)
                 }
             } else {
+                AppIconButton(AppIcons.Back, "返回", back, Modifier.size(48.dp), tint = Ink)
                 Text(
-                    book.title,
+                    if (returnActionLabel != null && focusedPage != null) "编辑第 $focusedPage 页" else book.title,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f).padding(start = 12.dp),
                 )
-                if (
+                if (returnActionLabel != null) {
+                    TextButton(onClick = back, modifier = Modifier.height(48.dp)) {
+                        Text(returnActionLabel, color = Moss, fontWeight = FontWeight.Bold)
+                    }
+                }
+                if (returnActionLabel == null &&
                     book.status == StoryStatus.COMPLETE &&
                         book.spreads.flatMap { it.effectiveSegments }.all { it.file.isFile }
                 )
                     TextButton(onClick = onPlayBook) {
                         Text("整本播放", color = Coral, fontWeight = FontWeight.Bold)
                     }
-                Box {
+                if (returnActionLabel == null) Box {
                     AppIconButton(AppIcons.More, "更多整理操作", { menuExpanded = true }, tint = Moss)
                     DropdownMenu(
                         expanded = menuExpanded,
@@ -450,6 +464,7 @@ private fun FocusPane(
     waveform: FloatArray?,
     playhead: Long?,
     more: Boolean,
+    focusedEdit: Boolean,
     onMore: () -> Unit,
     choose: (String) -> Unit,
     play: (Long?, Long?) -> Unit,
@@ -475,6 +490,7 @@ private fun FocusPane(
             waveform,
             playhead,
             more,
+            !focusedEdit,
             onMore,
             { a, b -> play(a, b) },
             trim,
@@ -484,7 +500,9 @@ private fun FocusPane(
             m,
         )
     }
-    if (expanded)
+    if (focusedEdit) {
+        editor(Modifier.fillMaxSize().navigationBarsPadding())
+    } else if (expanded)
         Row(Modifier.fillMaxSize().navigationBarsPadding()) {
             visual(Modifier.weight(.56f))
             editor(Modifier.weight(.44f).fillMaxHeight())
@@ -564,6 +582,7 @@ private fun AudioEditor(
     peaks: FloatArray?,
     playhead: Long?,
     more: Boolean,
+    allowAdvanced: Boolean,
     onMore: () -> Unit,
     preview: (Long, Long) -> Unit,
     trim: (Long, Long) -> Unit,
@@ -605,11 +624,20 @@ private fun AudioEditor(
         ) {
             Text("试听修剪结果")
         }
-        TextButton(onClick = onMore, modifier = Modifier.fillMaxWidth()) {
+        if (!allowAdvanced) {
+            OutlinedButton(
+                onClick = {
+                    range = 0f..total.toFloat()
+                    trim(0, total)
+                },
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+            ) { Text("恢复完整范围") }
+        }
+        if (allowAdvanced) TextButton(onClick = onMore, modifier = Modifier.fillMaxWidth()) {
             AppIcon(if (more) AppIcons.ExpandLess else AppIcons.ExpandMore, null)
             Text(if (more) "收起音频操作" else "更多音频操作", modifier = Modifier.padding(start = 4.dp))
         }
-        if (more) {
+        if (allowAdvanced && more) {
             if (!ignored && suggestion != null)
                 Surface(color = Honey.copy(.25f), shape = RoundedCornerShape(12.dp)) {
                     Column(Modifier.padding(9.dp)) {
@@ -663,7 +691,7 @@ private fun AudioEditor(
                 Text("重新录制本书面")
             }
         }
-        Surface(
+        if (allowAdvanced) Surface(
             color = SoftWhite,
             shape = RoundedCornerShape(13.dp),
             modifier = Modifier.fillMaxWidth().clickable(onClick = refs).padding(14.dp),

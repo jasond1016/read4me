@@ -170,7 +170,7 @@ fun LibraryScreen(
     BackHandler(enabled = shellTab == WarmShellTab.ME) { shellTab = WarmShellTab.LIBRARY }
     Box(Modifier.fillMaxSize().background(WarmPaper)) {
         Surface(
-            Modifier.fillMaxSize().padding(bottom = 76.dp).navigationBarsPadding(),
+            Modifier.fillMaxSize().padding(bottom = 76.dp).statusBarsPadding().navigationBarsPadding(),
             color = WarmPaper,
         ) {
             BoxWithConstraints {
@@ -220,9 +220,10 @@ private fun LibraryHome(
     onRename: (StoryBook, String) -> Unit,
     onMoveToTrash: (StoryBook) -> Unit,
 ) {
+    var query by remember { mutableStateOf("") }
     val repairBookIds = recognitionSummaries.filter { it.needsNewReference }.map { it.bookId }.toSet()
     val visible = books.filter { book ->
-        when (filter) {
+        book.title.contains(query.trim(), ignoreCase = true) && when (filter) {
             "已完成" -> book.status == StoryStatus.COMPLETE
             "录制中" -> book.status == StoryStatus.IN_PROGRESS
             "待补拍" -> book.id in repairBookIds
@@ -254,7 +255,15 @@ private fun LibraryHome(
         }
     }
     val shelfHeader: @Composable () -> Unit = {
-        Text("我的书架", style = MaterialTheme.typography.headlineMedium, color = Ink)
+        Text("我的书架", style = MaterialTheme.typography.headlineLarge, color = Ink, fontWeight = FontWeight.Bold)
+        OutlinedTextField(
+            value = query,
+            onValueChange = { query = it },
+            modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+            singleLine = true,
+            shape = RoundedCornerShape(18.dp),
+            placeholder = { Text("搜索本地绘本名称") },
+        )
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(vertical = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             listOf("全部", "已完成", "录制中", "待补拍").forEach { label ->
                 val selected = filter == label
@@ -263,7 +272,7 @@ private fun LibraryHome(
         }
     }
     val bookCard: @Composable (StoryBook) -> Unit = { book ->
-        BookCard(book, { onOpenBook(book) }, { onExport(book) }, { onRename(book, it) }, { onMoveToTrash(book) }, { onContinueBook(book) }, { onPlayBook(book) })
+        BookCard(book, { onOpenBook(book) }, { onExport(book) }, { onRename(book, it) }, { onMoveToTrash(book) }, { onContinueBook(book) }, { onPlayBook(book) }, grid = !wide)
     }
     val padding = PaddingValues(horizontal = if (wide) 36.dp else 20.dp, vertical = 24.dp)
     if (wide) {
@@ -278,9 +287,22 @@ private fun LibraryHome(
         }
     } else {
         LazyColumn(Modifier.fillMaxSize(), contentPadding = padding, verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            item { left(); Spacer(Modifier.height(12.dp)); shelfHeader() }
+            item {
+                shelfHeader()
+                if (books.isEmpty()) {
+                    Spacer(Modifier.height(10.dp))
+                    WarmIllustration(R.drawable.illustration_home_reading, "亲子一起阅读绘本", Modifier.fillMaxWidth().height(190.dp))
+                    EmptyLibraryCard()
+                    WarmPrimaryButton("录下第一本绘本", onCreateBook, Modifier.fillMaxWidth().padding(top = 14.dp), AppIcons.Add)
+                }
+            }
             if (books.isNotEmpty() && visible.isEmpty()) item { Text("这里暂时没有绘本", color = Ink.copy(.58f), modifier = Modifier.padding(vertical = 28.dp)) }
-            items(visible, key = { it.id }) { bookCard(it) }
+            items(visible.chunked(2), key = { row -> row.joinToString(":") { it.id } }) { row ->
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.Top) {
+                    row.forEach { book -> Box(Modifier.weight(1f)) { bookCard(book) } }
+                    if (row.size == 1) Spacer(Modifier.weight(1f))
+                }
+            }
             item { Spacer(Modifier.height(36.dp)) }
         }
     }
@@ -401,6 +423,7 @@ private fun BookCard(
     onMoveToTrash: () -> Unit,
     onContinue: () -> Unit,
     onPlay: () -> Unit,
+    grid: Boolean = false,
 ) {
     var showRename by remember { mutableStateOf(false) }
     var showDelete by remember { mutableStateOf(false) }
@@ -412,7 +435,41 @@ private fun BookCard(
         colors = CardDefaults.cardColors(containerColor = SoftWhite),
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (grid) Column(Modifier.fillMaxWidth()) {
+            Box(Modifier.fillMaxWidth().aspectRatio(.82f)) {
+                StoryImage(book.spreads.firstOrNull()?.imageFile, Modifier.fillMaxSize().clip(RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp)))
+                Surface(color = if (book.status == StoryStatus.COMPLETE) Moss.copy(.9f) else Honey.copy(.9f), shape = CircleShape, modifier = Modifier.align(Alignment.TopStart).padding(8.dp)) {
+                    Text(if (book.status == StoryStatus.COMPLETE) "已完成" else "录制中", color = if (book.status == StoryStatus.COMPLETE) Color.White else Ink, style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp))
+                }
+                Box(Modifier.align(Alignment.TopEnd)) {
+                    AppIconButton(
+                        AppIcons.More,
+                        "${book.title}更多操作",
+                        { showMenu = true },
+                        Modifier.padding(6.dp).size(42.dp).background(Ink.copy(.52f), CircleShape),
+                        tint = Color.White,
+                    )
+                    DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                        DropdownMenuItem(text = { Text("分享给家人") }, onClick = { showMenu = false; onExport() })
+                        DropdownMenuItem(text = { Text("重命名") }, onClick = { showMenu = false; showRename = true })
+                        DropdownMenuItem(text = { Text("移到回收站", color = Coral) }, onClick = { showMenu = false; showDelete = true })
+                    }
+                }
+                if (isPlayableBook(book)) AppIconButton(
+                    AppIcons.Play,
+                    "播放${book.title}",
+                    onPlay,
+                    Modifier.align(Alignment.BottomEnd).padding(6.dp).size(48.dp).background(SoftWhite.copy(.92f), CircleShape),
+                    tint = Coral,
+                    iconSize = 30.dp,
+                )
+            }
+            Column(Modifier.padding(12.dp)) {
+                Text(book.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text("${book.spreads.size} 个书面 · ${formatDuration(book.playableDurationMs)}", style = MaterialTheme.typography.bodySmall, color = Ink.copy(.62f), maxLines = 1)
+                if (book.status == StoryStatus.IN_PROGRESS) TextButton(onClick = onContinue, modifier = Modifier.fillMaxWidth().height(48.dp)) { Text("继续录制", color = Moss, fontWeight = FontWeight.Bold) }
+            }
+        } else Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
             StoryImage(
                 file = book.spreads.firstOrNull()?.imageFile,
                 modifier = Modifier.size(width = 78.dp, height = 68.dp).clip(RoundedCornerShape(14.dp)),
@@ -2249,7 +2306,11 @@ internal fun compositeWaveform(cache: PersistentWaveformCache, segments: List<co
 }
 
 @Composable
-internal fun StoryImage(file: File?, modifier: Modifier = Modifier) {
+internal fun StoryImage(
+    file: File?,
+    modifier: Modifier = Modifier,
+    contentScale: ContentScale = ContentScale.Crop,
+) {
     val context = LocalContext.current
     val imageKey = file?.let { "${it.absolutePath}:${it.lastModified()}:${it.length()}" }
     var bitmap by remember(imageKey) {
@@ -2265,7 +2326,7 @@ internal fun StoryImage(file: File?, modifier: Modifier = Modifier) {
         Image(
             bitmap = currentBitmap.asImageBitmap(),
             contentDescription = "绘本书面",
-            contentScale = ContentScale.Crop,
+            contentScale = contentScale,
             modifier = modifier,
         )
     } else {

@@ -27,10 +27,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Slider
@@ -55,7 +55,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
 import androidx.core.content.ContextCompat
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
@@ -65,7 +64,13 @@ import com.read4me.app.model.StoryBook
 import kotlinx.coroutines.delay
 
 @Composable
-fun AudioBookPlayerScreen(book: StoryBook, onBack: () -> Unit) {
+fun AudioBookPlayerScreen(
+    book: StoryBook,
+    initiallyShowPageList: Boolean = false,
+    playWhenReady: Boolean = true,
+    onEditSpread: (String, Boolean) -> Unit = { _, _ -> },
+    onBack: () -> Unit,
+) {
     val context = LocalContext.current
     val plan = remember(book) { AudioBookPlan.from(book) }
     var controller by remember { mutableStateOf<MediaController?>(null) }
@@ -74,15 +79,16 @@ fun AudioBookPlayerScreen(book: StoryBook, onBack: () -> Unit) {
     var playing by remember { mutableStateOf(false) }
     var speed by remember { mutableFloatStateOf(1f) }
     var expanded by remember { mutableStateOf(false) }
-    var showPages by remember { mutableStateOf(false) }
+    var showPages by remember(book.id) { mutableStateOf(initiallyShowPageList) }
     var showImage by remember { mutableStateOf(false) }
     val prefs = remember { context.getSharedPreferences(AudioBookPlaybackService.PREFS, Context.MODE_PRIVATE) }
     var sleepMode by remember { mutableStateOf(prefs.getString(AudioBookPlaybackService.KEY_TIMER_MODE, null)) }
 
-    LaunchedEffect(book.id) {
+    LaunchedEffect(book.id, playWhenReady) {
         context.startService(Intent(context, AudioBookPlaybackService::class.java).apply {
             action = AudioBookPlaybackService.ACTION_PLAY_BOOK
             putExtra(AudioBookPlaybackService.EXTRA_BOOK_ID, book.id)
+            putExtra(AudioBookPlaybackService.EXTRA_PLAY_WHEN_READY, playWhenReady)
         })
     }
     DisposableEffect(context) {
@@ -114,7 +120,13 @@ fun AudioBookPlayerScreen(book: StoryBook, onBack: () -> Unit) {
             delay(300)
         }
     }
-    BackHandler(onBack = onBack)
+    BackHandler {
+        when {
+            showImage -> showImage = false
+            showPages -> showPages = false
+            else -> onBack()
+        }
+    }
 
     val entry = plan.entries.getOrNull(queueIndex)
     val spreadIndex = entry?.spreadIndex ?: 0
@@ -133,6 +145,46 @@ fun AudioBookPlayerScreen(book: StoryBook, onBack: () -> Unit) {
             action = AudioBookPlaybackService.ACTION_SLEEP
             putExtra(AudioBookPlaybackService.EXTRA_SLEEP_MODE, mode)
         })
+    }
+
+    if (showPages) {
+        PageListScreen(
+            book = book,
+            selected = spreadIndex,
+            playing = playing,
+            onBack = { showPages = false },
+            onEdit = { spreadId ->
+                val wasPlaying = controller?.isPlaying == true
+                controller?.pause()
+                onEditSpread(spreadId, wasPlaying)
+            },
+        ) { index ->
+            controller?.let { player ->
+                if (index == spreadIndex) {
+                    if (player.isPlaying) player.pause() else player.play()
+                } else {
+                    plan.entries.firstOrNull { it.spreadIndex == index }?.let {
+                        player.seekTo(it.queueIndex, 0)
+                        player.play()
+                    }
+                }
+            }
+        }
+        return
+    }
+    if (showImage) {
+        FullscreenSpread(
+            spreadImage = spread?.imageFile,
+            page = spreadIndex + 1,
+            pageCount = plan.spreadCount,
+            position = wholePosition,
+            duration = plan.durationMs,
+            playing = playing,
+            onExit = { showImage = false },
+            onSeek = ::seekBook,
+            onToggle = { controller?.let { if (it.isPlaying) it.pause() else it.play() } },
+        )
+        return
     }
 
     Surface(Modifier.fillMaxSize(), color = WarmPaper) {
@@ -212,15 +264,6 @@ fun AudioBookPlayerScreen(book: StoryBook, onBack: () -> Unit) {
         }
     }
 
-    if (showPages) PagePicker(book, spreadIndex, onDismiss = { showPages = false }) { index ->
-        plan.entries.firstOrNull { it.spreadIndex == index }?.let { controller?.seekTo(it.queueIndex, 0) }
-        showPages = false
-    }
-    if (showImage) Dialog(onDismissRequest = { showImage = false }) {
-        Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(20.dp), color = SoftWhite) {
-            StoryImage(spread?.imageFile, Modifier.fillMaxWidth().aspectRatio(1.32f).clickable { showImage = false })
-        }
-    }
 }
 
 @Composable
@@ -266,15 +309,14 @@ private fun PlayerPanel(
         Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 PanelAction(AppIcons.Restart, "从头播放", onRestart, Modifier.weight(1f))
-                PanelAction(AppIcons.List, "书面列表", onPages, Modifier.weight(1f))
-                PanelAction(AppIcons.Timer, sleepMode?.let(::sleepLabel) ?: "定时关闭", onTimer, Modifier.weight(1f))
-                PanelAction(AppIcons.Speed, "${speedLabel(speed)}x 倍速", onSpeed, Modifier.weight(1f))
-            }
-            TextButton(onClick = onToggle, modifier = Modifier.align(Alignment.CenterHorizontally)) {
-                AppIcon(if (expanded) AppIcons.ExpandLess else AppIcons.ExpandMore, null, tint = Ink.copy(.62f))
-                Text(if (expanded) "收起控制面板" else "展开控制面板", color = Ink.copy(.62f), modifier = Modifier.padding(start = 4.dp))
+                PanelAction(AppIcons.More, "更多", onToggle, Modifier.weight(1f))
             }
             if (expanded) {
+                Row(Modifier.fillMaxWidth().padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    PanelAction(AppIcons.List, "书面列表", onPages, Modifier.weight(1f))
+                    PanelAction(AppIcons.Timer, sleepMode?.let(::sleepLabel) ?: "定时关闭", onTimer, Modifier.weight(1f))
+                    PanelAction(AppIcons.Speed, "${speedLabel(speed)}x 倍速", onSpeed, Modifier.weight(1f))
+                }
                 Text("睡眠定时", style = MaterialTheme.typography.titleMedium, color = Ink, fontWeight = FontWeight.Bold,
                     modifier = Modifier.padding(horizontal = 4.dp, vertical = 14.dp))
                 listOf(
@@ -304,29 +346,90 @@ private fun PanelAction(icon: Int, label: String, onClick: () -> Unit, modifier:
 }
 
 @Composable
-private fun PagePicker(book: StoryBook, selected: Int, onDismiss: () -> Unit, onSelect: (Int) -> Unit) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("选择书面") },
-        text = {
-            LazyColumn(Modifier.height(420.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+private fun PageListScreen(
+    book: StoryBook,
+    selected: Int,
+    playing: Boolean,
+    onBack: () -> Unit,
+    onEdit: (String) -> Unit,
+    onSelect: (Int) -> Unit,
+) {
+    Surface(Modifier.fillMaxSize(), color = WarmPaper) {
+        Column {
+            Row(Modifier.fillMaxWidth().statusBarsPadding().height(64.dp).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                AppIconButton(AppIcons.Back, "返回播放器", onBack, Modifier.size(48.dp), tint = Ink)
+                Text("书面列表", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f), textAlign = TextAlign.Center)
+                Spacer(Modifier.size(48.dp))
+            }
+            val allHavePhotos = book.spreads.all { it.references.isNotEmpty() }
+            Text(
+                "共 ${book.spreads.size} 个书面 · ${if (allHavePhotos) "均有参考照片" else "部分书面缺少参考照片"}",
+                color = Ink.copy(.64f), modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp),
+            )
+            LazyColumn(
+                Modifier.fillMaxSize().navigationBarsPadding(),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
                 items(book.spreads, key = { it.spreadId }) { spread ->
                     val index = spread.ordinal - 1
+                    val playable = spread.effectiveSegments.isNotEmpty() && spread.effectiveSegments.all { it.file.isFile }
+                    var menu by remember(spread.spreadId) { mutableStateOf(false) }
                     Surface(
-                        Modifier.fillMaxWidth().clickable { onSelect(index) },
-                        shape = RoundedCornerShape(14.dp),
-                        color = if (index == selected) Honey.copy(.18f) else WarmPaper,
+                        Modifier.fillMaxWidth().clickable(enabled = playable) { onSelect(index) },
+                        shape = RoundedCornerShape(18.dp),
+                        color = if (index == selected) Honey.copy(.25f) else SoftWhite,
                     ) {
                         Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                            StoryImage(spread.imageFile, Modifier.size(width = 72.dp, height = 54.dp))
-                            Text("书面 ${spread.ordinal}", Modifier.padding(start = 12.dp), fontWeight = if (index == selected) FontWeight.Bold else FontWeight.Normal)
+                            StoryImage(spread.imageFile, Modifier.size(width = 86.dp, height = 64.dp))
+                            Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                                Text("第 ${spread.ordinal} 页 / 书面 ${spread.ordinal}", fontWeight = if (index == selected) FontWeight.Bold else FontWeight.Medium)
+                                Text(formatAudioTime(spread.durationMs), color = Ink.copy(.6f))
+                            }
+                            if (playable) {
+                                AppIcon(if (index == selected && playing) AppIcons.Pause else AppIcons.Play, if (index == selected && playing) "暂停" else "播放", tint = if (index == selected) Honey else Moss)
+                            } else {
+                                Text("无音频", color = Ink.copy(.45f), style = MaterialTheme.typography.labelSmall)
+                            }
+                            Box {
+                                AppIconButton(AppIcons.More, "书面 ${spread.ordinal} 更多操作", { menu = true }, Modifier.size(48.dp), tint = Ink)
+                                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                                    DropdownMenuItem(text = { Text("编辑声音") }, onClick = { menu = false; onEdit(spread.spreadId) })
+                                }
+                            }
                         }
                     }
                 }
             }
-        },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("关闭") } },
-    )
+        }
+    }
+}
+
+@Composable
+private fun FullscreenSpread(
+    spreadImage: java.io.File?, page: Int, pageCount: Int, position: Long, duration: Long,
+    playing: Boolean, onExit: () -> Unit, onSeek: (Long) -> Unit, onToggle: () -> Unit,
+) {
+    Surface(Modifier.fillMaxSize(), color = Color.Black) {
+        Box(Modifier.fillMaxSize()) {
+            StoryImage(spreadImage, Modifier.fillMaxSize(), contentScale = androidx.compose.ui.layout.ContentScale.Fit)
+            Surface(Modifier.align(Alignment.TopStart).statusBarsPadding().padding(12.dp), color = Color.Black.copy(.55f), shape = CircleShape) {
+                AppIconButton(AppIcons.Back, "退出全屏", onExit, Modifier.size(48.dp), tint = Color.White)
+            }
+            Surface(Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(16.dp), color = Color.Black.copy(.55f), shape = CircleShape) {
+                Text("$page / $pageCount", color = Color.White, modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp))
+            }
+            Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Color.Black.copy(.68f)).navigationBarsPadding().padding(18.dp)) {
+                Slider(value = if (duration > 0) position.toFloat() / duration else 0f, onValueChange = { onSeek((it * duration).toLong()) })
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text(formatAudioTime(position), color = Color.White); Text(formatAudioTime(duration), color = Color.White) }
+                Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
+                    RoundPlayerButton(AppIcons.Replay, "后退 15 秒", 52, { onSeek(position - 15_000) }, "15")
+                    Button(onClick = onToggle, modifier = Modifier.size(68.dp), shape = CircleShape, contentPadding = PaddingValues(0.dp), colors = ButtonDefaults.buttonColors(containerColor = Honey)) { AppIcon(if (playing) AppIcons.Pause else AppIcons.Play, if (playing) "暂停" else "播放", tint = Color.White, size = 36.dp) }
+                    RoundPlayerButton(AppIcons.ForwardMedia, "前进 15 秒", 52, { onSeek(position + 15_000) }, "15")
+                }
+            }
+        }
+    }
 }
 
 private fun sleepLabel(mode: String) = when (mode) {

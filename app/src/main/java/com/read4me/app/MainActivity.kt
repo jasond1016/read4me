@@ -63,8 +63,16 @@ class MainActivity : ComponentActivity() {
             val organizeSelected: String? = null,
             val organizeCurrent: String? = null,
             val organizeImages: List<java.io.File> = emptyList(),
+            val focusedSpreadId: String? = null,
+            val pageListReturnTo: AudioBookReturn? = null,
+            val resumePageListPlayback: Boolean = false,
         ) : Destination
-        data class AudioBook(val book: StoryBook, val returnTo: AudioBookReturn) : Destination
+        data class AudioBook(
+            val book: StoryBook,
+            val returnTo: AudioBookReturn,
+            val initiallyShowPageList: Boolean = false,
+            val playWhenReady: Boolean = true,
+        ) : Destination
         data class CompletionSummary(val book: StoryBook) : Destination
         data class Rerecord(val book: StoryBook, val spreadId: String) : Destination
         data class Recapture(
@@ -370,6 +378,8 @@ class MainActivity : ComponentActivity() {
                     is Destination.Review -> ReviewScreen(
                         book = current.book,
                         repository = repository,
+                        initialSelectedSpreadId = current.focusedSpreadId,
+                        returnActionLabel = if (current.pageListReturnTo != null) "完成" else null,
                         onRerecord = { updatedBook, spreadId ->
                             val target = Destination.Rerecord(updatedBook, spreadId)
                             if (hasAudioPermission()) {
@@ -426,12 +436,31 @@ class MainActivity : ComponentActivity() {
                         initialOrganizeImages = current.organizeImages,
                         onBack = {
                             books = repository.loadAll()
-                            destination = Destination.Library
+                            destination = if (current.pageListReturnTo != null) {
+                                val refreshed = repository.loadAll().firstOrNull { it.id == current.book.id } ?: current.book
+                                Destination.AudioBook(
+                                    refreshed,
+                                    current.pageListReturnTo,
+                                    initiallyShowPageList = true,
+                                    playWhenReady = current.resumePageListPlayback,
+                                )
+                            } else Destination.Library
                         },
                     )
 
                     is Destination.AudioBook -> AudioBookPlayerScreen(
                         book = current.book,
+                        initiallyShowPageList = current.initiallyShowPageList,
+                        playWhenReady = current.playWhenReady,
+                        onEditSpread = { spreadId, wasPlaying ->
+                            val refreshed = repository.loadAll().firstOrNull { it.id == current.book.id } ?: current.book
+                            destination = Destination.Review(
+                                refreshed,
+                                focusedSpreadId = spreadId,
+                                pageListReturnTo = current.returnTo,
+                                resumePageListPlayback = wasPlaying,
+                            )
+                        },
                         onBack = {
                             destination = when (current.returnTo) {
                                 Destination.AudioBookReturn.LIBRARY -> Destination.Library

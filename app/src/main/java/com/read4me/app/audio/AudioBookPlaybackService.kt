@@ -79,14 +79,16 @@ class AudioBookPlaybackService : MediaSessionService(), Player.Listener {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_PLAY_BOOK -> intent.getStringExtra(EXTRA_BOOK_ID)?.let(::openBook)
+            ACTION_PLAY_BOOK -> intent.getStringExtra(EXTRA_BOOK_ID)?.let { bookId ->
+                openBook(bookId, intent.getBooleanExtra(EXTRA_PLAY_WHEN_READY, true))
+            }
             ACTION_SLEEP -> setTimer(intent.getStringExtra(EXTRA_SLEEP_MODE) ?: SLEEP_CANCEL)
         }
         super.onStartCommand(intent, flags, startId)
         return START_NOT_STICKY
     }
 
-    private fun openBook(bookId: String) {
+    private fun openBook(bookId: String, playWhenReady: Boolean) {
         val book = StoryRepository(this).loadAll().firstOrNull { it.id == bookId }
         val nextPlan = book?.let(AudioBookPlan::from)
         if (nextPlan == null || nextPlan.entries.isEmpty() || nextPlan.entries.any { !it.file.isFile }) {
@@ -97,7 +99,7 @@ class AudioBookPlaybackService : MediaSessionService(), Player.Listener {
         }
         if (plan == nextPlan && exoPlayer.mediaItemCount > 0) {
             if (exoPlayer.playbackState == Player.STATE_ENDED) exoPlayer.seekTo(0, 0)
-            if (!exoPlayer.isPlaying) exoPlayer.play()
+            if (playWhenReady) exoPlayer.play() else exoPlayer.pause()
             return
         }
         persistProgress()
@@ -130,7 +132,7 @@ class AudioBookPlaybackService : MediaSessionService(), Player.Listener {
         lastSpreadIndex = nextPlan.entries[resume.queueIndex].spreadIndex
         exoPlayer.setMediaItems(items, resume.queueIndex, resume.itemPositionMs)
         exoPlayer.prepare()
-        exoPlayer.play()
+        exoPlayer.playWhenReady = playWhenReady
     }
 
     override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
@@ -203,6 +205,7 @@ class AudioBookPlaybackService : MediaSessionService(), Player.Listener {
         const val ACTION_PLAY_BOOK = "com.read4me.app.PLAY_AUDIO_BOOK"
         const val ACTION_SLEEP = "com.read4me.app.AUDIO_BOOK_SLEEP"
         const val EXTRA_BOOK_ID = "bookId"
+        const val EXTRA_PLAY_WHEN_READY = "playWhenReady"
         const val EXTRA_SPREAD_ID = "spreadId"
         const val EXTRA_SPREAD_INDEX = "spreadIndex"
         const val EXTRA_SEGMENT_INDEX = "segmentIndex"
