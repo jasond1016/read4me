@@ -600,7 +600,6 @@ private fun AudioEditor(
     val suggestion =
         remember(peaks, total) {
             peaks
-                ?.takeIf { s.sourceSegments.size == 1 }
                 ?.let { WaveformMath.suggestSilenceTrim(it, 0, total) }
         }
     Column(modifier.verticalScroll(rememberScrollState()).padding(14.dp)) {
@@ -625,6 +624,23 @@ private fun AudioEditor(
             Text("试听修剪结果")
         }
         if (!allowAdvanced) {
+            OutlinedButton(
+                onClick = {
+                    val detected = suggestion ?: return@OutlinedButton
+                    range = detected.startMs.toFloat()..detected.endMs.toFloat()
+                    trim(detected.startMs, detected.endMs)
+                },
+                enabled = suggestion != null,
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+            ) {
+                Text(
+                    when {
+                        peaks == null -> "正在分析首尾空白…"
+                        suggestion != null -> "自动去除首尾空白"
+                        else -> "未检测到明显首尾空白"
+                    }
+                )
+            }
             OutlinedButton(
                 onClick = {
                     range = 0f..total.toFloat()
