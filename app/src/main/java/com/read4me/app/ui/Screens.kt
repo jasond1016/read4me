@@ -1009,7 +1009,13 @@ fun RecordingScreen(
         )
         pendingCaptures += spreadId
         requireNotNull(controller).takePicture(
-            ImageCapture.OutputFileOptions.Builder(captureFile).build(),
+            ImageCapture.OutputFileOptions.Builder(captureFile)
+                .setMetadata(
+                    ImageCapture.Metadata().apply {
+                        isReversedHorizontal = false
+                    },
+                )
+                .build(),
             mainExecutor,
             object : ImageCapture.OnImageSavedCallback {
                 override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
