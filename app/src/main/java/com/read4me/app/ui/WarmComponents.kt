@@ -26,7 +26,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
@@ -102,34 +101,31 @@ fun WarmBottomShell(selected: WarmShellTab, modifier: Modifier = Modifier, onSel
             listOf(
                 Triple(WarmShellTab.LIBRARY, AppIcons.Library, "书架"),
                 Triple(WarmShellTab.READING, AppIcons.Reading, "陪读"),
-                Triple(WarmShellTab.RECORD, AppIcons.Add, "录制"),
+                Triple(WarmShellTab.RECORD, AppIcons.LibraryAdd, "录制"),
                 Triple(WarmShellTab.ME, AppIcons.Home, "我的"),
             ).forEach { (tab, glyph, label) ->
                 val active = selected == tab
                 TextButton(
                     onClick = { onSelect(tab) },
-                    modifier = Modifier.weight(1f).height(if (tab == WarmShellTab.RECORD) 74.dp else 64.dp),
+                    modifier = Modifier.weight(1f).height(64.dp),
                     contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp),
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Box(
-                            Modifier.then(
-                                if (tab == WarmShellTab.RECORD) Modifier
-                                    .shadow(8.dp, CircleShape).size(52.dp).background(WarmCoral, CircleShape)
-                                else Modifier.size(30.dp).then(
-                                    if (active) Modifier.background(WarmCoral.copy(alpha = .12f), CircleShape) else Modifier,
-                                ),
+                            Modifier.size(30.dp).then(
+                                if (active) Modifier.background(WarmCoral.copy(alpha = .12f), CircleShape)
+                                else Modifier,
                             ),
                             contentAlignment = Alignment.Center,
                         ) {
                             AppIcon(
                                 glyph,
                                 contentDescription = null,
-                                tint = if (tab == WarmShellTab.RECORD) Color.White else if (active) WarmCoral else WarmBrown.copy(.58f),
-                                size = if (tab == WarmShellTab.RECORD) 32.dp else 24.dp,
+                                tint = if (active) WarmCoral else WarmBrown.copy(.58f),
+                                size = 24.dp,
                             )
                         }
-                        Text(label, color = if (active || tab == WarmShellTab.RECORD) WarmCoral else WarmBrown.copy(.62f), style = MaterialTheme.typography.labelSmall, fontWeight = if (active) FontWeight.Bold else FontWeight.Normal)
+                        Text(label, color = if (active) WarmCoral else WarmBrown.copy(.62f), style = MaterialTheme.typography.labelSmall, fontWeight = if (active) FontWeight.Bold else FontWeight.Normal)
                     }
                 }
             }
