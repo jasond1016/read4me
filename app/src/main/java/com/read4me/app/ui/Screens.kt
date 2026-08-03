@@ -2,6 +2,7 @@ package com.read4me.app.ui
 
 import android.app.Activity
 import android.content.Intent
+import android.os.SystemClock
 import android.view.WindowManager
 import androidx.activity.compose.BackHandler
 import androidx.camera.core.CameraSelector
@@ -863,6 +864,31 @@ fun RecordingScreen(
         )
     }
     var latestFingerprint by remember { mutableStateOf<ByteArray?>(null) }
+    var isFrontCamera by remember { mutableStateOf(false) }
+    var ignorePageTurnsUntil by remember { mutableLongStateOf(0L) }
+
+    fun switchCamera() {
+        val camera = controller ?: return
+        val targetFront = !isFrontCamera
+        detector.reset()
+        latestFingerprint = null
+        isMoving = false
+        motionScore = 0f
+        ignorePageTurnsUntil = SystemClock.elapsedRealtime() + 1_200L
+        runCatching {
+            camera.cameraSelector =
+                if (targetFront) CameraSelector.DEFAULT_FRONT_CAMERA
+                else CameraSelector.DEFAULT_BACK_CAMERA
+        }.onSuccess {
+            isFrontCamera = targetFront
+            captureMessage =
+                if (targetFront) "已切换到前置摄像头 · 录音继续"
+                else "已切换到后置摄像头 · 录音继续"
+        }.onFailure {
+            ignorePageTurnsUntil = 0L
+            captureMessage = if (targetFront) "这台设备没有可用的前置摄像头" else "无法切换到后置摄像头"
+        }
+    }
 
     KeepScreenOn(isRecording)
 
@@ -1032,7 +1058,12 @@ fun RecordingScreen(
                     latestFingerprint = fingerprint
                     motionScore = result.motionScore
                     isMoving = result.isMoving
-                    if (result.pageTurned && phase == RecordingPhase.RECORDING && initialCaptureReady) {
+                    if (
+                        result.pageTurned &&
+                            SystemClock.elapsedRealtime() >= ignorePageTurnsUntil &&
+                            phase == RecordingPhase.RECORDING &&
+                            initialCaptureReady
+                    ) {
                         captureMarker(MarkerSource.AUTOMATIC)
                     }
                 }
@@ -1081,6 +1112,26 @@ fun RecordingScreen(
                         },
                         modifier = Modifier.fillMaxSize(),
                     )
+                    if (
+                        pendingCaptures.isEmpty() &&
+                            phase != RecordingPhase.FINALIZING &&
+                            phase != RecordingPhase.SAVE_FAILED
+                    ) {
+                        Surface(
+                            color = Ink.copy(alpha = .72f),
+                            shape = CircleShape,
+                            modifier = Modifier.align(Alignment.TopEnd).padding(top = 16.dp, end = 16.dp),
+                        ) {
+                            AppIconButton(
+                                AppIcons.CameraSwitch,
+                                if (isFrontCamera) "切换到后置摄像头" else "切换到前置摄像头",
+                                ::switchCamera,
+                                Modifier.size(48.dp),
+                                tint = Color.White,
+                                iconSize = 27.dp,
+                            )
+                        }
+                    }
                     BookGuideFrame(active = isMoving, modifier = Modifier.align(Alignment.Center))
                 } else {
                     Column(

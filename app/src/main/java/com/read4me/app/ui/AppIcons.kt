@@ -33,6 +33,7 @@ object AppIcons {
     val ExpandMore = R.drawable.ic_expand_more
     val Library = R.drawable.ic_library_books
     val Reading = R.drawable.ic_menu_book
+    val CameraSwitch = R.drawable.ic_switch_camera
     val Add = R.drawable.ic_add
     val Home = R.drawable.ic_home
     val Drag = R.drawable.ic_drag_handle
