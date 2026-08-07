@@ -1815,6 +1815,7 @@ fun RecaptureScreen(
     book: StoryBook,
     spreadId: String,
     repository: StoryRepository,
+    capturePurpose: ReferenceCapturePurpose = ReferenceCapturePurpose.ADD_REFERENCE,
     progressLabel: String? = null,
     onSkip: (() -> Unit)? = null,
     onCancel: () -> Unit,
@@ -1882,7 +1883,8 @@ fun RecaptureScreen(
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     Text(
-                        if (progressLabel == null) "添加书面 $ordinal 的参考照片"
+                        if (progressLabel == null && capturePurpose == ReferenceCapturePurpose.REPLACE_DISPLAY_IMAGE) "更换书面 $ordinal 的展示图片"
+                        else if (progressLabel == null) "添加书面 $ordinal 的识别参考图"
                         else "批量补拍 $progressLabel · 书面 $ordinal",
                         style = MaterialTheme.typography.headlineLarge,
                     )
@@ -1917,8 +1919,11 @@ fun RecaptureScreen(
                                                 runCatching {
                                                     val target = repository.replaceReferenceImage(book, spreadId, captureFile)
                                                     installed = target
-                                                    val updated = StoryBookEditor.addReference(book, spreadId,
-                                                        SpreadReference(target, capturedFingerprint, 2, quality))
+                                                    val reference = SpreadReference(target, capturedFingerprint, 2, quality)
+                                                    val withReference = StoryBookEditor.addReference(book, spreadId, reference)
+                                                    val updated = if (capturePurpose == ReferenceCapturePurpose.REPLACE_DISPLAY_IMAGE) {
+                                                        StoryBookEditor.setPrimaryReference(withReference, spreadId, reference.referenceId)
+                                                    } else withReference
                                                     repository.save(updated)
                                                     updated
                                                 }.onSuccess { updated -> onFinished(updated, book, requireNotNull(installed)) }.onFailure {
@@ -1941,7 +1946,13 @@ fun RecaptureScreen(
                         },
                         modifier = Modifier.fillMaxWidth().height(56.dp),
                         shape = RoundedCornerShape(18.dp),
-                    ) { Text(if (isCapturing) "分析并保存中" else "拍下并添加") }
+                    ) {
+                        Text(
+                            if (isCapturing) "分析并保存中"
+                            else if (capturePurpose == ReferenceCapturePurpose.REPLACE_DISPLAY_IMAGE) "拍下并设为展示图"
+                            else "拍下并添加",
+                        )
+                    }
                     if (onSkip != null) {
                         TextButton(enabled = !isCapturing, onClick = onSkip) { Text("跳过这个书面") }
                     }

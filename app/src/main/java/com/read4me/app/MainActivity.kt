@@ -28,9 +28,11 @@ import com.read4me.app.ui.Read4MeTheme
 import com.read4me.app.ui.RecordingScreen
 import com.read4me.app.ui.RerecordScreen
 import com.read4me.app.ui.RecaptureScreen
+import com.read4me.app.ui.ReferenceCapturePurpose
 import com.read4me.app.ui.ReferenceVerificationScreen
 import com.read4me.app.ui.ReviewScreen
 import com.read4me.app.ui.BookOverviewScreen
+import com.read4me.app.ui.SpreadPreviewScreen
 import com.read4me.app.ui.SetupScreen
 import com.read4me.app.ui.StoryImageLoader
 import com.read4me.app.ui.ChildReadingScreen
@@ -56,6 +58,7 @@ class MainActivity : ComponentActivity() {
         data object Setup : Destination
         data class ChildReading(val returnBookId: String? = null) : Destination
         data class BookDetails(val book: StoryBook) : Destination
+        data class SpreadPreview(val book: StoryBook, val spreadId: String) : Destination
         data class Recording(
             val book: StoryBook,
             val mode: RecordingMode = RecordingMode.CAMERA,
@@ -75,6 +78,7 @@ class MainActivity : ComponentActivity() {
             val resumePageListPlayback: Boolean = false,
             val returnToDetails: Boolean = false,
             val pageListBackToCaller: Boolean = false,
+            val returnToPreviewSpreadId: String? = null,
         ) : Destination
         data class AudioBook(
             val book: StoryBook,
@@ -88,6 +92,7 @@ class MainActivity : ComponentActivity() {
             val book: StoryBook,
             val spreadId: String,
             val returnToDetails: Boolean = false,
+            val returnToPreviewSpreadId: String? = null,
         ) : Destination
         data class Recapture(
             val book: StoryBook,
@@ -96,6 +101,8 @@ class MainActivity : ComponentActivity() {
             val undoImage: java.io.File?,
             val returnToLibrary: Boolean = false,
             val returnToDetails: Boolean = false,
+            val returnToPreview: Boolean = false,
+            val capturePurpose: ReferenceCapturePurpose = ReferenceCapturePurpose.ADD_REFERENCE,
         ) : Destination
         data class BatchRecapture(
             val book: StoryBook,
@@ -111,6 +118,7 @@ class MainActivity : ComponentActivity() {
             val undoImage: java.io.File?,
             val returnToLibrary: Boolean,
             val returnToDetails: Boolean = false,
+            val returnToPreview: Boolean = false,
         ) : Destination
         data class InsertSpread(
             val baseBook: StoryBook,
@@ -397,11 +405,21 @@ class MainActivity : ComponentActivity() {
                             )
                         },
                         onOpenSpread = { spreadId ->
-                            destination = Destination.Review(
-                                current.book,
-                                focusedSpreadId = spreadId,
-                                returnToDetails = true,
-                            )
+                            val spread = current.book.spreads.firstOrNull { it.spreadId == spreadId }
+                            if (spread?.references.isNullOrEmpty()) {
+                                val target = Destination.Recapture(
+                                    current.book,
+                                    spreadId,
+                                    undo = null,
+                                    undoImage = null,
+                                    returnToPreview = true,
+                                )
+                                if (hasCameraPermission()) destination = target
+                                else {
+                                    permissionTarget = target
+                                    permissionLauncher.launch(arrayOf(Manifest.permission.CAMERA))
+                                }
+                            } else destination = Destination.SpreadPreview(current.book, spreadId)
                         },
                         onOrganize = {
                             destination = Destination.Review(
@@ -431,6 +449,39 @@ class MainActivity : ComponentActivity() {
                         onOpenMe = {
                             libraryInitialTab = WarmShellTab.ME
                             destination = Destination.Library
+                        },
+                    )
+
+                    is Destination.SpreadPreview -> SpreadPreviewScreen(
+                        book = current.book,
+                        initialSpreadId = current.spreadId,
+                        repository = repository,
+                        onBack = {
+                            books = repository.loadAll()
+                            destination = books.firstOrNull { it.id == current.book.id }
+                                ?.let(Destination::BookDetails) ?: Destination.Library
+                        },
+                        onEditNarration = { updatedBook, spreadId ->
+                            destination = Destination.Review(
+                                updatedBook,
+                                focusedSpreadId = spreadId,
+                                returnToPreviewSpreadId = spreadId,
+                            )
+                        },
+                        onCaptureReference = { updatedBook, spreadId, purpose ->
+                            val target = Destination.Recapture(
+                                updatedBook,
+                                spreadId,
+                                undo = null,
+                                undoImage = null,
+                                returnToPreview = true,
+                                capturePurpose = purpose,
+                            )
+                            if (hasCameraPermission()) destination = target
+                            else {
+                                permissionTarget = target
+                                permissionLauncher.launch(arrayOf(Manifest.permission.CAMERA))
+                            }
                         },
                     )
 
@@ -489,12 +540,13 @@ class MainActivity : ComponentActivity() {
                         book = current.book,
                         repository = repository,
                         initialSelectedSpreadId = current.focusedSpreadId,
-                        returnActionLabel = if (current.pageListReturnTo != null) "完成" else null,
+                        returnActionLabel = if (current.pageListReturnTo != null || current.returnToPreviewSpreadId != null) "完成" else null,
                         onRerecord = { updatedBook, spreadId ->
                             val target = Destination.Rerecord(
                                 updatedBook,
                                 spreadId,
                                 returnToDetails = current.returnToDetails,
+                                returnToPreviewSpreadId = current.returnToPreviewSpreadId,
                             )
                             if (hasAudioPermission()) {
                                 destination = target
@@ -510,6 +562,7 @@ class MainActivity : ComponentActivity() {
                                 undo,
                                 undoImage,
                                 returnToDetails = current.returnToDetails,
+                                returnToPreview = current.returnToPreviewSpreadId != null,
                             )
                             if (hasCameraPermission()) destination = target
                             else {
@@ -573,6 +626,9 @@ class MainActivity : ComponentActivity() {
                                     playWhenReady = current.resumePageListPlayback,
                                     pageListBackToCaller = current.pageListBackToCaller,
                                 )
+                            } else if (current.returnToPreviewSpreadId != null) {
+                                val refreshed = repository.loadAll().firstOrNull { it.id == current.book.id } ?: current.book
+                                Destination.SpreadPreview(refreshed, current.returnToPreviewSpreadId)
                             } else if (current.returnToDetails) {
                                 val refreshed = repository.loadAll().firstOrNull { it.id == current.book.id } ?: current.book
                                 Destination.BookDetails(refreshed)
@@ -610,7 +666,9 @@ class MainActivity : ComponentActivity() {
                         spreadId = current.spreadId,
                         repository = repository,
                         onCancel = {
-                            destination = Destination.Review(
+                            destination = current.returnToPreviewSpreadId?.let {
+                                Destination.SpreadPreview(current.book, it)
+                            } ?: Destination.Review(
                                 current.book,
                                 focusedSpreadId = current.spreadId,
                                 returnToDetails = current.returnToDetails,
@@ -618,7 +676,9 @@ class MainActivity : ComponentActivity() {
                         },
                         onFinished = { updated ->
                             books = repository.loadAll()
-                            destination = Destination.Review(
+                            destination = current.returnToPreviewSpreadId?.let {
+                                Destination.SpreadPreview(updated, it)
+                            } ?: Destination.Review(
                                 updated,
                                 focusedSpreadId = current.spreadId,
                                 returnToDetails = current.returnToDetails,
@@ -630,8 +690,11 @@ class MainActivity : ComponentActivity() {
                         book = current.book,
                         spreadId = current.spreadId,
                         repository = repository,
+                        capturePurpose = current.capturePurpose,
                         onCancel = {
-                            destination = if (current.returnToLibrary) Destination.Library else {
+                            destination = if (current.returnToLibrary) Destination.Library
+                            else if (current.returnToPreview) Destination.SpreadPreview(current.book, current.spreadId)
+                            else {
                                 Destination.Review(
                                     current.book,
                                     current.undo,
@@ -649,6 +712,7 @@ class MainActivity : ComponentActivity() {
                                 image,
                                 current.returnToLibrary,
                                 returnToDetails = current.returnToDetails,
+                                returnToPreview = current.returnToPreview,
                             )
                         },
                     )
@@ -692,6 +756,7 @@ class MainActivity : ComponentActivity() {
                                                 null,
                                                 returnToLibrary = false,
                                                 returnToDetails = current.returnToDetails,
+                                                returnToPreview = false,
                                             )
                                         } else {
                                             current.copy(
@@ -714,7 +779,8 @@ class MainActivity : ComponentActivity() {
                             recognitionSummaries = recognitionHistory.summaries()
                             books = repository.loadAll()
                             destination = if (current.returnToLibrary) Destination.Library else {
-                                if (current.returnToDetails) Destination.BookDetails(current.book)
+                                if (current.returnToPreview) Destination.SpreadPreview(current.book, current.spreadId)
+                                else if (current.returnToDetails) Destination.BookDetails(current.book)
                                 else Destination.Review(current.book, current.undo, current.undoImage)
                             }
                         },
@@ -722,7 +788,8 @@ class MainActivity : ComponentActivity() {
                             recognitionSummaries = recognitionHistory.summaries()
                             books = repository.loadAll()
                             destination = if (current.returnToLibrary) Destination.Library else {
-                                if (current.returnToDetails) Destination.BookDetails(current.book)
+                                if (current.returnToPreview) Destination.SpreadPreview(current.book, current.spreadId)
+                                else if (current.returnToDetails) Destination.BookDetails(current.book)
                                 else Destination.Review(current.book, current.undo, current.undoImage)
                             }
                         },
