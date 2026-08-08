@@ -594,64 +594,57 @@ fun ReviewScreen(
                     )
                 }
             else if (selected != null)
-                FocusPane(
+                AudioEditor(
                     current,
                     selected,
-                    expanded,
-                    playingId == selectedId,
                     waveform,
                     playhead,
                     playbackStart,
                     more,
-                    returnActionLabel != null,
+                    false,
                     { more = !more },
-                    ::choose,
-                    play = { a, b ->
-                        if (a == null && playingId == selectedId) stop()
-                        else {
-                            stop()
-                            playingId = selectedId
-                            playbackStart = a ?: selected.trimStartMs
-                            playbackEnd = b ?: selected.trimEndMs
-                            playhead = playbackStart
-                            val clips =
-                                if (a == null || b == null) selected.effectiveSegments
-                                else NarrationTimeline.clip(selected.sourceSegments, a, b)
-                            if (
-                                !player.play(
-                                    clips,
-                                    onError = {
-                                        playingId = null
-                                        playhead = null
-                                        playbackStart = null
-                                        playbackEnd = null
-                                    },
-                                    onFinished = {
-                                        playingId = null
-                                        playhead = null
-                                        playbackStart = null
-                                        playbackEnd = null
-                                    },
-                                )
-                            ) {
-                                playingId = null
-                                playhead = null
-                                playbackStart = null
-                                playbackEnd = null
-                            }
+                    { a, b ->
+                        stop()
+                        playingId = selectedId
+                        playbackStart = a
+                        playbackEnd = b
+                        playhead = a
+                        val clips = NarrationTimeline.clip(selected.sourceSegments, a, b)
+                        if (
+                            !player.play(
+                                clips,
+                                onError = {
+                                    playingId = null
+                                    playhead = null
+                                    playbackStart = null
+                                    playbackEnd = null
+                                },
+                                onFinished = {
+                                    playingId = null
+                                    playhead = null
+                                    playbackStart = null
+                                    playbackEnd = null
+                                },
+                            )
+                        ) {
+                            playingId = null
+                            playhead = null
+                            playbackStart = null
+                            playbackEnd = null
                         }
                     },
-                    trim = { a, b ->
+                    { a, b ->
                         apply(StoryBookEditor.trimNarration(current, selectedId, a, b))
                     },
-                    boundary = { id, p ->
+                    { id, p ->
                         apply(StoryBookEditor.moveBoundary(current, selectedId, id, p))
                     },
-                    references = { refs = true },
-                    rerecord = {
+                    { refs = true },
+                    {
                         stop()
                         onRerecord(current, selectedId)
                     },
+                    Modifier.fillMaxSize().navigationBarsPadding(),
                 )
             else
                 Text(
@@ -787,128 +780,6 @@ private fun ReviewTopBar(
                             },
                         )
                     }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun FocusPane(
-    book: StoryBook,
-    spread: StorySpread,
-    expanded: Boolean,
-    playing: Boolean,
-    waveform: FloatArray?,
-    playhead: Long?,
-    playbackStart: Long?,
-    more: Boolean,
-    focusedEdit: Boolean,
-    onMore: () -> Unit,
-    choose: (String) -> Unit,
-    play: (Long?, Long?) -> Unit,
-    trim: (Long, Long) -> Unit,
-    boundary: (String, Long) -> Unit,
-    references: () -> Unit,
-    rerecord: () -> Unit,
-) {
-    val visual: @Composable (Modifier) -> Unit = { m ->
-        Column(m.padding(14.dp)) {
-            StoryImage(
-                spread.imageFile,
-                Modifier.fillMaxWidth().weight(1f).clip(RoundedCornerShape(20.dp)),
-            )
-            Playback(book, spread, playing, choose) { play(null, null) }
-            Filmstrip(book, spread.spreadId, choose)
-        }
-    }
-    val editor: @Composable (Modifier) -> Unit = { m ->
-        AudioEditor(
-            book,
-            spread,
-            waveform,
-            playhead,
-            playbackStart,
-            more,
-            !focusedEdit,
-            onMore,
-            { a, b -> play(a, b) },
-            trim,
-            boundary,
-            references,
-            rerecord,
-            m,
-        )
-    }
-    if (focusedEdit) {
-        editor(Modifier.fillMaxSize().navigationBarsPadding())
-    } else if (expanded)
-        Row(Modifier.fillMaxSize().navigationBarsPadding()) {
-            visual(Modifier.weight(.56f))
-            editor(Modifier.weight(.44f).fillMaxHeight())
-        }
-    else
-        Column(Modifier.fillMaxSize().navigationBarsPadding()) {
-            visual(Modifier.weight(.47f))
-            editor(Modifier.weight(.53f))
-        }
-}
-
-@Composable
-private fun Playback(
-    book: StoryBook,
-    s: StorySpread,
-    playing: Boolean,
-    choose: (String) -> Unit,
-    play: () -> Unit,
-) {
-    val i = book.spreads.indexOf(s)
-    Column(Modifier.padding(top = 8.dp)) {
-        Text(
-            "书面 ${i+1}/${book.spreads.size} · ${formatDuration(s.durationMs)} · ${if(s.trimStartMs>0||s.trimEndMs<NarrationTimeline.duration(s.sourceSegments))"已修剪" else "完整范围"} · ${s.sourceSegments.size} 段录音",
-            color = Ink.copy(.65f),
-        )
-        Row(Modifier.fillMaxWidth(), Arrangement.SpaceEvenly, Alignment.CenterVertically) {
-            TextButton(enabled = i > 0, onClick = { choose(book.spreads[i - 1].spreadId) }) {
-                AppIcon(AppIcons.Back, null)
-                Text("上一书面", modifier = Modifier.padding(start = 4.dp))
-            }
-            Button(onClick = play, shape = CircleShape) {
-                AppIcon(if (playing) AppIcons.Pause else AppIcons.Play, null, size = 28.dp)
-                Text(if (playing) "停止" else "播放", modifier = Modifier.padding(start = 4.dp))
-            }
-            TextButton(
-                enabled = i < book.spreads.lastIndex,
-                onClick = { choose(book.spreads[i + 1].spreadId) },
-            ) {
-                Text("下一书面", modifier = Modifier.padding(end = 4.dp))
-                AppIcon(AppIcons.Forward, null)
-            }
-        }
-    }
-}
-
-@Composable
-private fun Filmstrip(book: StoryBook, id: String, choose: (String) -> Unit) {
-    Row(
-        Modifier.horizontalScroll(rememberScrollState()).padding(vertical = 5.dp),
-        horizontalArrangement = Arrangement.spacedBy(7.dp),
-    ) {
-        book.spreads.forEach { s ->
-            Surface(
-                color = if (s.spreadId == id) Honey.copy(.5f) else SoftWhite,
-                shape = RoundedCornerShape(9.dp),
-                modifier = Modifier.size(68.dp, 54.dp).clickable { choose(s.spreadId) },
-            ) {
-                Box {
-                    StoryImage(s.imageFile, Modifier.fillMaxSize())
-                    Text(
-                        "${s.ordinal}",
-                        Modifier.align(Alignment.BottomEnd)
-                            .background(Ink.copy(.65f))
-                            .padding(horizontal = 5.dp),
-                        color = Color.White,
-                    )
                 }
             }
         }
