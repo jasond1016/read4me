@@ -39,6 +39,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.horizontalScroll
@@ -601,14 +602,16 @@ fun SetupScreen(
                             Modifier.weight(.46f).fillMaxHeight(),
                             ContentScale.Fit,
                         )
-                        SetupForm(
-                            title = title,
-                            onTitleChange = { title = it },
-                            message = message,
-                            onCamera = { onStart(title, RecordingMode.CAMERA) },
-                            onManual = { onStart(title, RecordingMode.MANUAL) },
-                            modifier = Modifier.weight(.54f).fillMaxHeight(),
-                        )
+                        Box(Modifier.weight(.54f).fillMaxHeight(), contentAlignment = Alignment.Center) {
+                            SetupForm(
+                                title = title,
+                                onTitleChange = { title = it },
+                                message = message,
+                                onCamera = { onStart(title, RecordingMode.CAMERA) },
+                                onManual = { onStart(title, RecordingMode.MANUAL) },
+                                modifier = Modifier.widthIn(max = 560.dp).fillMaxSize(),
+                            )
+                        }
                     }
                 } else {
                     Column(Modifier.fillMaxSize().padding(horizontal = 20.dp, vertical = 10.dp)) {
@@ -1305,10 +1308,11 @@ fun RecordingScreen(
                 color = Paper,
                 shape = RoundedCornerShape(topStart = 30.dp, topEnd = 30.dp),
             ) {
-                Column(
-                    Modifier.fillMaxSize().verticalScroll(rememberScrollState())
-                        .navigationBarsPadding().padding(22.dp),
-                ) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+                    Column(
+                        Modifier.widthIn(max = 600.dp).fillMaxSize().verticalScroll(rememberScrollState())
+                            .navigationBarsPadding().padding(22.dp),
+                    ) {
                     Text(captureMessage, style = MaterialTheme.typography.titleLarge)
                     Text(
                         if (mode == RecordingMode.MANUAL && isRecording) "读完当前书面并翻页后，按“下一书面”。"
@@ -1409,13 +1413,14 @@ fun RecordingScreen(
                             shape = RoundedCornerShape(18.dp),
                         ) { Text(if (markers.isEmpty()) "删除空草稿" else "返回书架") }
                     }
-                    Text(
-                        if (mode == RecordingMode.MANUAL) "摄像头保持关闭 · 书面照片可稍后补拍"
-                        else "运动值 ${motionScore.toInt()} · 自动标记会在新书面稳定后发生",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = Ink.copy(alpha = 0.42f),
-                        modifier = Modifier.padding(top = 12.dp).align(Alignment.CenterHorizontally),
-                    )
+                        Text(
+                            if (mode == RecordingMode.MANUAL) "摄像头保持关闭 · 书面照片可稍后补拍"
+                            else "运动值 ${motionScore.toInt()} · 自动标记会在新书面稳定后发生",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = Ink.copy(alpha = 0.42f),
+                            modifier = Modifier.padding(top = 12.dp).align(Alignment.CenterHorizontally),
+                        )
+                    }
                 }
             }
         }
@@ -1506,7 +1511,8 @@ private fun ManualRecordingActive(
             }
         }
         Column(
-            Modifier.fillMaxWidth().weight(1f).padding(horizontal = 28.dp, vertical = 18.dp),
+            Modifier.widthIn(max = 600.dp).fillMaxWidth().weight(1f)
+                .align(Alignment.CenterHorizontally).padding(horizontal = 28.dp, vertical = 18.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {
@@ -1531,31 +1537,33 @@ private fun ManualRecordingActive(
             )
         }
         Surface(color = Color.White, shadowElevation = 8.dp, shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)) {
-            Column(
-                Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 22.dp, vertical = 18.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                Text("读完当前书面并翻页后", color = WarmBrown.copy(alpha = .68f))
-                Button(
-                    onClick = onNextPage,
-                    enabled = !pageJustChanged,
-                    modifier = Modifier.fillMaxWidth().padding(top = 9.dp).height(68.dp),
-                    shape = RoundedCornerShape(22.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = if (pageJustChanged) WarmMoss else WarmCoral,
-                        disabledContainerColor = WarmMoss,
-                        disabledContentColor = Color.White,
-                    ),
+            Box(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 22.dp, vertical = 18.dp)) {
+                Column(
+                    Modifier.widthIn(max = 560.dp).fillMaxWidth().align(Alignment.Center),
+                    horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
-                    Text(
-                        if (pageJustChanged) "✓ 已进入书面 $page" else "进入书面 ${page + 1}",
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold,
-                    )
-                }
-                TextButton(onClick = onPause, modifier = Modifier.padding(top = 5.dp).height(48.dp)) {
-                    AppIcon(AppIcons.Pause, null, tint = WarmBrown, size = 21.dp)
-                    Text("暂停并安全保存", color = WarmBrown, modifier = Modifier.padding(start = 7.dp))
+                    Text("读完当前书面并翻页后", color = WarmBrown.copy(alpha = .68f))
+                    Button(
+                        onClick = onNextPage,
+                        enabled = !pageJustChanged,
+                        modifier = Modifier.fillMaxWidth().padding(top = 9.dp).height(68.dp),
+                        shape = RoundedCornerShape(22.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (pageJustChanged) WarmMoss else WarmCoral,
+                            disabledContainerColor = WarmMoss,
+                            disabledContentColor = Color.White,
+                        ),
+                    ) {
+                        Text(
+                            if (pageJustChanged) "✓ 已进入书面 $page" else "进入书面 ${page + 1}",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                    TextButton(onClick = onPause, modifier = Modifier.padding(top = 5.dp).height(48.dp)) {
+                        AppIcon(AppIcons.Pause, null, tint = WarmBrown, size = 21.dp)
+                        Text("暂停并安全保存", color = WarmBrown, modifier = Modifier.padding(start = 7.dp))
+                    }
                 }
             }
         }
@@ -1564,18 +1572,20 @@ private fun ManualRecordingActive(
 
 @Composable
 private fun ManualRecordingSaving() {
-    Column(
-        Modifier.fillMaxSize().background(WarmPaper).statusBarsPadding().navigationBarsPadding().padding(32.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Text("正在安全保存录音……", style = MaterialTheme.typography.headlineSmall, color = WarmBrown, fontWeight = FontWeight.Bold)
-        LinearProgressIndicator(
-            modifier = Modifier.fillMaxWidth().padding(top = 28.dp).height(7.dp).clip(CircleShape),
-            color = WarmMoss,
-            trackColor = WarmMoss.copy(alpha = .16f),
-        )
-        Text("保存完成前请不要退出", color = WarmBrown.copy(alpha = .58f), modifier = Modifier.padding(top = 16.dp))
+    Box(Modifier.fillMaxSize().background(WarmPaper).statusBarsPadding().navigationBarsPadding().padding(32.dp)) {
+        Column(
+            Modifier.widthIn(max = 560.dp).fillMaxWidth().align(Alignment.Center),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text("正在安全保存录音……", style = MaterialTheme.typography.headlineSmall, color = WarmBrown, fontWeight = FontWeight.Bold)
+            LinearProgressIndicator(
+                modifier = Modifier.fillMaxWidth().padding(top = 28.dp).height(7.dp).clip(CircleShape),
+                color = WarmMoss,
+                trackColor = WarmMoss.copy(alpha = .16f),
+            )
+            Text("保存完成前请不要退出", color = WarmBrown.copy(alpha = .58f), modifier = Modifier.padding(top = 16.dp))
+        }
     }
 }
 
@@ -1589,58 +1599,62 @@ private fun ManualRecordingPaused(
     onComplete: () -> Unit,
     onReturnToLibrary: () -> Unit,
 ) {
-    Column(
-        Modifier.fillMaxSize().background(WarmPaper).statusBarsPadding().navigationBarsPadding().padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Text(if (isNew) "手动翻页录制" else "录制已暂停", style = MaterialTheme.typography.headlineSmall, color = WarmBrown, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.weight(1f))
-        WarmIllustration(
-            R.drawable.illustration_recording_pause,
-            if (isNew) "准备开始手动翻页录制" else "录制已暂停并安全保存",
-            Modifier.fillMaxWidth().height(190.dp),
-            ContentScale.Fit,
-        )
-        Text(
-            if (isNew) "录制时不会开启摄像头，读完并翻页后手动标记下一书面。" else "录音已经安全保存",
-            color = if (isNew) WarmBrown.copy(alpha = .68f) else WarmMoss,
-            modifier = Modifier.padding(top = 18.dp),
-        )
-        if (!isNew) Text("$pageCount 个书面 · ${formatDuration(durationMs)}", color = WarmBrown.copy(alpha = .58f), modifier = Modifier.padding(top = 7.dp))
-        Spacer(Modifier.weight(1f))
-        Button(
-            onClick = onResume,
-            modifier = Modifier.fillMaxWidth().height(60.dp),
-            shape = RoundedCornerShape(20.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = WarmCoral),
-        ) { Text(if (isNew) "开始录制" else "继续当前书面", fontWeight = FontWeight.Bold) }
-        if (hasRecording) {
-            OutlinedButton(onClick = onComplete, modifier = Modifier.fillMaxWidth().padding(top = 10.dp).height(54.dp), shape = RoundedCornerShape(18.dp)) {
-                Text("整本书录制完成", color = WarmMoss)
+    Box(Modifier.fillMaxSize().background(WarmPaper).statusBarsPadding().navigationBarsPadding().padding(24.dp)) {
+        Column(
+            Modifier.widthIn(max = 560.dp).fillMaxSize().align(Alignment.Center),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(if (isNew) "手动翻页录制" else "录制已暂停", style = MaterialTheme.typography.headlineSmall, color = WarmBrown, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.weight(1f))
+            WarmIllustration(
+                R.drawable.illustration_recording_pause,
+                if (isNew) "准备开始手动翻页录制" else "录制已暂停并安全保存",
+                Modifier.fillMaxWidth().height(190.dp),
+                ContentScale.Fit,
+            )
+            Text(
+                if (isNew) "录制时不会开启摄像头，读完并翻页后手动标记下一书面。" else "录音已经安全保存",
+                color = if (isNew) WarmBrown.copy(alpha = .68f) else WarmMoss,
+                modifier = Modifier.padding(top = 18.dp),
+            )
+            if (!isNew) Text("$pageCount 个书面 · ${formatDuration(durationMs)}", color = WarmBrown.copy(alpha = .58f), modifier = Modifier.padding(top = 7.dp))
+            Spacer(Modifier.weight(1f))
+            Button(
+                onClick = onResume,
+                modifier = Modifier.fillMaxWidth().height(60.dp),
+                shape = RoundedCornerShape(20.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = WarmCoral),
+            ) { Text(if (isNew) "开始录制" else "继续当前书面", fontWeight = FontWeight.Bold) }
+            if (hasRecording) {
+                OutlinedButton(onClick = onComplete, modifier = Modifier.fillMaxWidth().padding(top = 10.dp).height(54.dp), shape = RoundedCornerShape(18.dp)) {
+                    Text("整本书录制完成", color = WarmMoss)
+                }
             }
-        }
-        TextButton(onClick = onReturnToLibrary, modifier = Modifier.padding(top = 6.dp)) {
-            Text(if (isNew) "取消并删除空草稿" else "返回书架，稍后继续", color = WarmBrown.copy(alpha = .7f))
+            TextButton(onClick = onReturnToLibrary, modifier = Modifier.padding(top = 6.dp)) {
+                Text(if (isNew) "取消并删除空草稿" else "返回书架，稍后继续", color = WarmBrown.copy(alpha = .7f))
+            }
         }
     }
 }
 
 @Composable
 private fun ManualRecordingSaveFailed(message: String, onRetry: () -> Unit) {
-    Column(
-        Modifier.fillMaxSize().background(WarmPaper).statusBarsPadding().navigationBarsPadding().padding(28.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Text("录音尚未保存", style = MaterialTheme.typography.headlineSmall, color = Coral, fontWeight = FontWeight.Bold)
-        Text(message, color = WarmBrown.copy(alpha = .7f), modifier = Modifier.padding(top = 14.dp))
-        Button(
-            onClick = onRetry,
-            modifier = Modifier.fillMaxWidth().padding(top = 28.dp).height(58.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = Coral),
-            shape = RoundedCornerShape(18.dp),
-        ) { Text("重试保存") }
-        Text("保存成功前不能离开，以免这次录音丢失。", color = Coral, modifier = Modifier.padding(top = 12.dp))
+    Box(Modifier.fillMaxSize().background(WarmPaper).statusBarsPadding().navigationBarsPadding().padding(28.dp)) {
+        Column(
+            Modifier.widthIn(max = 560.dp).fillMaxWidth().align(Alignment.Center),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text("录音尚未保存", style = MaterialTheme.typography.headlineSmall, color = Coral, fontWeight = FontWeight.Bold)
+            Text(message, color = WarmBrown.copy(alpha = .7f), modifier = Modifier.padding(top = 14.dp))
+            Button(
+                onClick = onRetry,
+                modifier = Modifier.fillMaxWidth().padding(top = 28.dp).height(58.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Coral),
+                shape = RoundedCornerShape(18.dp),
+            ) { Text("重试保存") }
+            Text("保存成功前不能离开，以免这次录音丢失。", color = Coral, modifier = Modifier.padding(top = 12.dp))
+        }
     }
 }
 
@@ -2634,10 +2648,11 @@ fun RerecordScreen(
     }
 
     Surface(Modifier.fillMaxSize(), color = Paper) {
-        Column(
-            Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 30.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
+        Box(Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 30.dp)) {
+            Column(
+                Modifier.widthIn(max = 600.dp).fillMaxSize().align(Alignment.Center),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
             Text("单独重录", style = MaterialTheme.typography.headlineLarge)
             Text(
                 "${book.title} · 书面 $ordinal",
@@ -2694,12 +2709,13 @@ fun RerecordScreen(
                 shape = RoundedCornerShape(18.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = if (isRecording) Moss else Coral),
             ) { Text(if (isRecording) "完成并使用这段录音" else "● 开始重录") }
-            if (!isRecording) {
-                OutlinedButton(
-                    onClick = ::cancel,
-                    modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
-                    shape = RoundedCornerShape(18.dp),
-                ) { Text("取消") }
+                if (!isRecording) {
+                    OutlinedButton(
+                        onClick = ::cancel,
+                        modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+                        shape = RoundedCornerShape(18.dp),
+                    ) { Text("取消") }
+                }
             }
         }
     }
