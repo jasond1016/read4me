@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
@@ -37,53 +38,58 @@ fun CompletionSummaryScreen(book: StoryBook, onPlay: () -> Unit, onReview: () ->
     Surface(Modifier.fillMaxSize(), color = WarmPaper) {
         Column(Modifier.fillMaxSize()) {
             CompletionTopBar(onReview)
-            Column(
+            Box(
                 Modifier.fillMaxWidth().weight(1f).padding(horizontal = 24.dp, vertical = 18.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
+                contentAlignment = Alignment.Center,
             ) {
-                Surface(color = WarmMoss.copy(alpha = .14f), shape = CircleShape, modifier = Modifier.size(88.dp)) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Text("✓", color = WarmMoss, style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.Bold)
-                    }
-                }
-                Text(
-                    "录音已经安全保存",
-                    style = MaterialTheme.typography.headlineSmall,
-                    color = WarmBrown,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(top = 18.dp),
-                )
-                Text(
-                    book.title,
-                    style = MaterialTheme.typography.titleLarge,
-                    color = WarmBrown.copy(alpha = .78f),
-                    textAlign = TextAlign.Center,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(top = 8.dp),
-                )
-                WarmCard(Modifier.fillMaxWidth().padding(top = 26.dp)) {
-                    Row(
-                        Modifier.fillMaxWidth().padding(vertical = 20.dp),
-                        horizontalArrangement = Arrangement.SpaceEvenly,
-                    ) {
-                        SummaryStat("${book.spreads.size}", "书面")
-                        SummaryStat(formatSummaryDuration(book.playableDurationMs), "总时长")
-                    }
-                }
-                Surface(
-                    color = if (missingPhotos == 0) WarmMoss.copy(alpha = .11f) else WarmAmber.copy(alpha = .13f),
-                    shape = RoundedCornerShape(18.dp),
-                    modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
+                Column(
+                    Modifier.widthIn(max = 560.dp).fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
                 ) {
+                    Surface(color = WarmMoss.copy(alpha = .14f), shape = CircleShape, modifier = Modifier.size(88.dp)) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Text("✓", color = WarmMoss, style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.Bold)
+                        }
+                    }
                     Text(
-                        if (missingPhotos == 0) "全部书面均有图片"
-                        else "还有 $missingPhotos 个书面需要补拍图片，可稍后在书籍详情中处理",
+                        "录音已经安全保存",
+                        style = MaterialTheme.typography.headlineSmall,
                         color = WarmBrown,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 14.dp),
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(top = 18.dp),
                     )
+                    Text(
+                        book.title,
+                        style = MaterialTheme.typography.titleLarge,
+                        color = WarmBrown.copy(alpha = .78f),
+                        textAlign = TextAlign.Center,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(top = 8.dp),
+                    )
+                    WarmCard(Modifier.fillMaxWidth().padding(top = 26.dp)) {
+                        Row(
+                            Modifier.fillMaxWidth().padding(vertical = 20.dp),
+                            horizontalArrangement = Arrangement.SpaceEvenly,
+                        ) {
+                            SummaryStat("${book.spreads.size}", "书面")
+                            SummaryStat(formatSummaryDuration(book.playableDurationMs), "总时长")
+                        }
+                    }
+                    Surface(
+                        color = if (missingPhotos == 0) WarmMoss.copy(alpha = .11f) else WarmAmber.copy(alpha = .13f),
+                        shape = RoundedCornerShape(18.dp),
+                        modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
+                    ) {
+                        Text(
+                            if (missingPhotos == 0) "全部书面均有图片"
+                            else "还有 $missingPhotos 个书面需要补拍图片，可稍后在书籍详情中处理",
+                            color = WarmBrown,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 14.dp),
+                        )
+                    }
                 }
             }
             CompletionActions(onPlay, onReview)
@@ -114,16 +120,16 @@ private fun CompletionTopBar(onBack: () -> Unit) {
 @Composable
 private fun CompletionActions(onPlay: () -> Unit, onReview: () -> Unit) {
     Surface(color = Color.White, shadowElevation = 8.dp, shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)) {
-        Column(
-            Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 22.dp, vertical = 16.dp),
-        ) {
-            WarmPrimaryButton("试听整本旁白", onPlay, Modifier.fillMaxWidth(), AppIcons.Play)
-            OutlinedButton(
-                onClick = onReview,
-                modifier = Modifier.fillMaxWidth().padding(top = 9.dp).height(52.dp),
-                shape = RoundedCornerShape(18.dp),
-            ) {
-                Text("查看和整理书籍", color = WarmMoss, fontWeight = FontWeight.Bold)
+        Box(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 22.dp, vertical = 16.dp)) {
+            Column(Modifier.widthIn(max = 520.dp).fillMaxWidth().align(Alignment.Center)) {
+                WarmPrimaryButton("试听整本旁白", onPlay, Modifier.fillMaxWidth(), AppIcons.Play)
+                OutlinedButton(
+                    onClick = onReview,
+                    modifier = Modifier.fillMaxWidth().padding(top = 9.dp).height(52.dp),
+                    shape = RoundedCornerShape(18.dp),
+                ) {
+                    Text("查看和整理书籍", color = WarmMoss, fontWeight = FontWeight.Bold)
+                }
             }
         }
     }

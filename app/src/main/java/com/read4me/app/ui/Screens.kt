@@ -237,7 +237,12 @@ private fun LibraryHome(
         Column {
             Text("留声绘本", style = MaterialTheme.typography.displayLarge, color = Ink)
             Text("把陪伴的声音，留在每一次翻页里。", color = Ink.copy(.66f), modifier = Modifier.padding(top = 4.dp, bottom = 14.dp))
-            WarmIllustration(R.drawable.illustration_home_reading, "亲子一起阅读绘本", Modifier.fillMaxWidth().height(if (wide) 260.dp else 205.dp))
+            WarmIllustration(
+                R.drawable.illustration_home_reading,
+                "亲子一起阅读绘本",
+                Modifier.fillMaxWidth().height(if (wide) 260.dp else 205.dp),
+                ContentScale.Fit,
+            )
             if (recent != null) {
                 WarmCard(Modifier.fillMaxWidth().padding(top = 14.dp)) {
                     Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -293,7 +298,12 @@ private fun LibraryHome(
                 shelfHeader()
                 if (books.isEmpty()) {
                     Spacer(Modifier.height(10.dp))
-                    WarmIllustration(R.drawable.illustration_home_reading, "亲子一起阅读绘本", Modifier.fillMaxWidth().height(190.dp))
+                    WarmIllustration(
+                        R.drawable.illustration_home_reading,
+                        "亲子一起阅读绘本",
+                        Modifier.fillMaxWidth().height(190.dp),
+                        ContentScale.Fit,
+                    )
                     EmptyLibraryCard()
                     WarmPrimaryButton("录下第一本绘本", onCreateBook, Modifier.fillMaxWidth().padding(top = 14.dp), AppIcons.Add)
                 }
@@ -1377,6 +1387,7 @@ fun RecordingScreen(
                                 R.drawable.illustration_recording_pause,
                                 "录制已暂停并安全保存",
                                 Modifier.fillMaxWidth().height(150.dp).padding(top = 10.dp),
+                                ContentScale.Fit,
                             )
                             Text("录音已安全保存。你可以继续、完成，或先返回书架。", color = Moss, modifier = Modifier.padding(top = 10.dp))
                         }
@@ -1588,6 +1599,7 @@ private fun ManualRecordingPaused(
             R.drawable.illustration_recording_pause,
             if (isNew) "准备开始手动翻页录制" else "录制已暂停并安全保存",
             Modifier.fillMaxWidth().height(190.dp),
+            ContentScale.Fit,
         )
         Text(
             if (isNew) "录制时不会开启摄像头，读完并翻页后手动标记下一书面。" else "录音已经安全保存",
