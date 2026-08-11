@@ -856,6 +856,10 @@ fun RecordingScreen(
     var motionScore by remember { mutableFloatStateOf(0f) }
     var elapsedMs by remember { mutableLongStateOf(0) }
     var amplitude by remember { mutableFloatStateOf(0f) }
+    var manualPageFeedbackUntil by remember { mutableLongStateOf(0L) }
+    var uiNow by remember { mutableLongStateOf(SystemClock.elapsedRealtime()) }
+    var confirmUndoManualPage by remember { mutableStateOf(false) }
+    var confirmCompleteRecording by remember { mutableStateOf(false) }
     var captureMessage by remember(book.id) {
         mutableStateOf(
             if (phase == RecordingPhase.SAVE_FAILED) "上次保存未完成，请重试"
@@ -994,6 +998,7 @@ fun RecordingScreen(
             captureMessage = if (source == MarkerSource.INITIAL) {
                 "已开始第 1 个书面"
             } else {
+                manualPageFeedbackUntil = SystemClock.elapsedRealtime() + 1_200L
                 "已进入书面 ${markers.size}"
             }
             return
@@ -1101,12 +1106,84 @@ fun RecordingScreen(
         while (isRecording) {
             elapsedMs = recorder.elapsedMs
             amplitude = amplitudeLevel(recorder.amplitude)
+            uiNow = SystemClock.elapsedRealtime()
             delay(160)
         }
     }
 
+    fun resumeRecording() {
+        detector.reset()
+        val file = repository.recordingFile(draft)
+        recorder.start(file)
+        sessionFile = file
+        phase = RecordingPhase.RECORDING
+        if (markers.isEmpty()) {
+            initialCaptureReady = false
+            captureMessage = "正在建立第一个书面"
+            captureMarker(MarkerSource.INITIAL)
+        } else {
+            initialCaptureReady = true
+            val resumeId = draft.resumeSpreadId
+                ?.takeIf { id -> markers.any { it.spreadId == id } }
+                ?: markers.last().spreadId
+            sessionBoundaries += SessionBoundary(resumeId, 0L)
+            captureMessage = "继续当前书面"
+        }
+    }
+
+    fun undoManualPage() {
+        val removedId = sessionMarkerIds.removeAt(sessionMarkerIds.lastIndex)
+        sessionBoundaries.removeAll { it.spreadId == removedId }
+        markers.removeAll { it.spreadId == removedId }
+        manualPageFeedbackUntil = 0L
+        captureMessage = "已撤销上一次翻页 · 当前仍是书面 ${markers.size}"
+        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+    }
+
     Surface(Modifier.fillMaxSize(), color = Ink) {
-        Column(Modifier.fillMaxSize()) {
+        if (mode == RecordingMode.MANUAL) {
+            val canUndoManualPage = sessionBoundaries.size > 1 &&
+                sessionMarkerIds.lastOrNull() == sessionBoundaries.lastOrNull()?.spreadId
+            when (phase) {
+                RecordingPhase.RECORDING -> ManualRecordingActive(
+                    page = markers.size.coerceAtLeast(1),
+                    elapsedMs = elapsedMs,
+                    amplitude = amplitude,
+                    pageJustChanged = uiNow < manualPageFeedbackUntil,
+                    canUndo = canUndoManualPage,
+                    onBack = {
+                        finalizeSession()
+                        if (phase == RecordingPhase.PAUSED) onCancel()
+                    },
+                    onNextPage = {
+                        val markerCount = markers.size
+                        captureMarker(if (initialCaptureReady) MarkerSource.MANUAL else MarkerSource.INITIAL)
+                        if (markers.size > markerCount) haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    },
+                    onUndo = { confirmUndoManualPage = true },
+                    onPause = { finalizeSession() },
+                    onComplete = { confirmCompleteRecording = true },
+                )
+                RecordingPhase.FINALIZING -> ManualRecordingSaving()
+                RecordingPhase.SAVE_FAILED -> ManualRecordingSaveFailed(
+                    message = captureMessage,
+                    onRetry = { recovery.pendingCandidate?.let { persistCandidate(it, recovery.finishAfterSave) } },
+                )
+                RecordingPhase.READY,
+                RecordingPhase.PAUSED -> ManualRecordingPaused(
+                    hasRecording = markers.any { it.segments.isNotEmpty() },
+                    pageCount = markers.size,
+                    durationMs = draft.playableDurationMs,
+                    isNew = markers.isEmpty(),
+                    onResume = ::resumeRecording,
+                    onComplete = { confirmCompleteRecording = true },
+                    onReturnToLibrary = {
+                        if (markers.isEmpty()) repository.deleteDraft(draft)
+                        onCancel()
+                    },
+                )
+            }
+        } else Column(Modifier.fillMaxSize()) {
             Box(Modifier.fillMaxWidth().weight(1.1f)) {
                 if (controller != null) {
                     AndroidView(
@@ -1253,25 +1330,7 @@ fun RecordingScreen(
                             Text("录音已安全保存。你可以继续、完成，或先返回书架。", color = Moss, modifier = Modifier.padding(top = 10.dp))
                         }
                         Button(
-                            onClick = {
-                                detector.reset()
-                                val file = repository.recordingFile(draft)
-                                recorder.start(file)
-                                sessionFile = file
-                                phase = RecordingPhase.RECORDING
-                                if (markers.isEmpty()) {
-                                    initialCaptureReady = false
-                                    captureMessage = "正在保存第一个书面"
-                                    captureMarker(MarkerSource.INITIAL)
-                                } else {
-                                    initialCaptureReady = true
-                                    val resumeId = draft.resumeSpreadId
-                                        ?.takeIf { id -> markers.any { it.spreadId == id } }
-                                        ?: markers.last().spreadId
-                                    sessionBoundaries += SessionBoundary(resumeId, 0L)
-                                    captureMessage = "继续当前书面"
-                                }
-                            },
+                            onClick = ::resumeRecording,
                             enabled = mode == RecordingMode.MANUAL || latestFingerprint != null,
                             modifier = Modifier.fillMaxWidth().padding(top = 18.dp).height(58.dp),
                             shape = RoundedCornerShape(18.dp),
@@ -1299,9 +1358,228 @@ fun RecordingScreen(
             }
         }
     }
+    if (confirmUndoManualPage) {
+        AlertDialog(
+            onDismissRequest = { confirmUndoManualPage = false },
+            title = { Text("更正上一次翻页？") },
+            text = {
+                Text(
+                    "当前将从书面 ${markers.size} 回到书面 ${(markers.size - 1).coerceAtLeast(1)}。录音不会被删除，但刚才建立的分界会移除，之后的声音会并回前一书面。",
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        confirmUndoManualPage = false
+                        undoManualPage()
+                    },
+                ) { Text("撤销并返回", color = Coral) }
+            },
+            dismissButton = { TextButton(onClick = { confirmUndoManualPage = false }) { Text("取消") } },
+        )
+    }
+    if (confirmCompleteRecording) {
+        AlertDialog(
+            onDismissRequest = { confirmCompleteRecording = false },
+            title = { Text("整本书已经录完了吗？") },
+            text = { Text("完成后会进入书籍整理；如果只是暂时离开，请选择“暂停并安全保存”。") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        confirmCompleteRecording = false
+                        complete()
+                    },
+                ) { Text("确认录完", color = Moss, fontWeight = FontWeight.Bold) }
+            },
+            dismissButton = { TextButton(onClick = { confirmCompleteRecording = false }) { Text("继续录制") } },
+        )
+    }
 }
 
 private enum class RecordingPhase { READY, RECORDING, FINALIZING, PAUSED, SAVE_FAILED }
+
+@Composable
+private fun ManualRecordingActive(
+    page: Int,
+    elapsedMs: Long,
+    amplitude: Float,
+    pageJustChanged: Boolean,
+    canUndo: Boolean,
+    onBack: () -> Unit,
+    onNextPage: () -> Unit,
+    onUndo: () -> Unit,
+    onPause: () -> Unit,
+    onComplete: () -> Unit,
+) {
+    var menuExpanded by remember { mutableStateOf(false) }
+    Column(Modifier.fillMaxSize().background(WarmPaper)) {
+        Surface(color = Ink) {
+            Row(
+                Modifier.fillMaxWidth().statusBarsPadding().height(64.dp).padding(horizontal = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                AppIconButton(AppIcons.Back, "暂停并返回书架", onBack, Modifier.size(48.dp), tint = Color.White)
+                Column(Modifier.weight(1f).padding(start = 8.dp)) {
+                    Text("手动翻页录制", color = Color.White, fontWeight = FontWeight.Bold)
+                    Text("不使用摄像头", color = Color.White.copy(alpha = .62f), style = MaterialTheme.typography.labelMedium)
+                }
+                TextButton(onClick = onComplete) { Text("完成", color = Color.White, fontWeight = FontWeight.Bold) }
+                if (canUndo) Box {
+                    AppIconButton(AppIcons.More, "更多录制操作", { menuExpanded = true }, tint = Color.White)
+                    DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
+                        DropdownMenuItem(
+                            text = {
+                                Column {
+                                    Text("更正上一次翻页", color = Coral)
+                                    Text("会移除刚才的书面分界", style = MaterialTheme.typography.labelSmall)
+                                }
+                            },
+                            onClick = {
+                                menuExpanded = false
+                                onUndo()
+                            },
+                        )
+                    }
+                }
+            }
+        }
+        Column(
+            Modifier.fillMaxWidth().weight(1f).padding(horizontal = 28.dp, vertical = 18.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            Surface(color = Coral.copy(alpha = .12f), shape = CircleShape) {
+                Text("●  正在录制", color = Coral, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+            }
+            Text("书面 $page", color = WarmBrown, style = MaterialTheme.typography.displayMedium, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 18.dp))
+            Text("本次录制 ${formatDuration(elapsedMs)}", color = WarmBrown.copy(alpha = .62f), modifier = Modifier.padding(top = 5.dp))
+            Box(
+                Modifier.fillMaxWidth().padding(top = 24.dp).height(10.dp).clip(CircleShape).background(Color(0xFFE2D8C9)),
+            ) {
+                Box(
+                    Modifier.fillMaxWidth(amplitude.coerceIn(.04f, 1f)).fillMaxHeight()
+                        .background(Coral, CircleShape),
+                )
+            }
+            Text(
+                if (pageJustChanged) "✓ 已进入书面 $page" else "正在录制书面 $page",
+                color = if (pageJustChanged) WarmMoss else WarmBrown.copy(alpha = .58f),
+                fontWeight = if (pageJustChanged) FontWeight.Bold else FontWeight.Normal,
+                modifier = Modifier.padding(top = 15.dp),
+            )
+        }
+        Surface(color = Color.White, shadowElevation = 8.dp, shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)) {
+            Column(
+                Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 22.dp, vertical = 18.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text("读完当前书面并翻页后", color = WarmBrown.copy(alpha = .68f))
+                Button(
+                    onClick = onNextPage,
+                    enabled = !pageJustChanged,
+                    modifier = Modifier.fillMaxWidth().padding(top = 9.dp).height(68.dp),
+                    shape = RoundedCornerShape(22.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (pageJustChanged) WarmMoss else WarmCoral,
+                        disabledContainerColor = WarmMoss,
+                        disabledContentColor = Color.White,
+                    ),
+                ) {
+                    Text(
+                        if (pageJustChanged) "✓ 已进入书面 $page" else "进入书面 ${page + 1}",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+                TextButton(onClick = onPause, modifier = Modifier.padding(top = 5.dp).height(48.dp)) {
+                    AppIcon(AppIcons.Pause, null, tint = WarmBrown, size = 21.dp)
+                    Text("暂停并安全保存", color = WarmBrown, modifier = Modifier.padding(start = 7.dp))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ManualRecordingSaving() {
+    Column(
+        Modifier.fillMaxSize().background(WarmPaper).statusBarsPadding().navigationBarsPadding().padding(32.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text("正在安全保存录音……", style = MaterialTheme.typography.headlineSmall, color = WarmBrown, fontWeight = FontWeight.Bold)
+        LinearProgressIndicator(
+            modifier = Modifier.fillMaxWidth().padding(top = 28.dp).height(7.dp).clip(CircleShape),
+            color = WarmMoss,
+            trackColor = WarmMoss.copy(alpha = .16f),
+        )
+        Text("保存完成前请不要退出", color = WarmBrown.copy(alpha = .58f), modifier = Modifier.padding(top = 16.dp))
+    }
+}
+
+@Composable
+private fun ManualRecordingPaused(
+    hasRecording: Boolean,
+    pageCount: Int,
+    durationMs: Long,
+    isNew: Boolean,
+    onResume: () -> Unit,
+    onComplete: () -> Unit,
+    onReturnToLibrary: () -> Unit,
+) {
+    Column(
+        Modifier.fillMaxSize().background(WarmPaper).statusBarsPadding().navigationBarsPadding().padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(if (isNew) "手动翻页录制" else "录制已暂停", style = MaterialTheme.typography.headlineSmall, color = WarmBrown, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.weight(1f))
+        WarmIllustration(
+            R.drawable.illustration_recording_pause,
+            if (isNew) "准备开始手动翻页录制" else "录制已暂停并安全保存",
+            Modifier.fillMaxWidth().height(190.dp),
+        )
+        Text(
+            if (isNew) "录制时不会开启摄像头，读完并翻页后手动标记下一书面。" else "录音已经安全保存",
+            color = if (isNew) WarmBrown.copy(alpha = .68f) else WarmMoss,
+            modifier = Modifier.padding(top = 18.dp),
+        )
+        if (!isNew) Text("$pageCount 个书面 · ${formatDuration(durationMs)}", color = WarmBrown.copy(alpha = .58f), modifier = Modifier.padding(top = 7.dp))
+        Spacer(Modifier.weight(1f))
+        Button(
+            onClick = onResume,
+            modifier = Modifier.fillMaxWidth().height(60.dp),
+            shape = RoundedCornerShape(20.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = WarmCoral),
+        ) { Text(if (isNew) "开始录制" else "继续当前书面", fontWeight = FontWeight.Bold) }
+        if (hasRecording) {
+            OutlinedButton(onClick = onComplete, modifier = Modifier.fillMaxWidth().padding(top = 10.dp).height(54.dp), shape = RoundedCornerShape(18.dp)) {
+                Text("整本书录制完成", color = WarmMoss)
+            }
+        }
+        TextButton(onClick = onReturnToLibrary, modifier = Modifier.padding(top = 6.dp)) {
+            Text(if (isNew) "取消并删除空草稿" else "返回书架，稍后继续", color = WarmBrown.copy(alpha = .7f))
+        }
+    }
+}
+
+@Composable
+private fun ManualRecordingSaveFailed(message: String, onRetry: () -> Unit) {
+    Column(
+        Modifier.fillMaxSize().background(WarmPaper).statusBarsPadding().navigationBarsPadding().padding(28.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text("录音尚未保存", style = MaterialTheme.typography.headlineSmall, color = Coral, fontWeight = FontWeight.Bold)
+        Text(message, color = WarmBrown.copy(alpha = .7f), modifier = Modifier.padding(top = 14.dp))
+        Button(
+            onClick = onRetry,
+            modifier = Modifier.fillMaxWidth().padding(top = 28.dp).height(58.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = Coral),
+            shape = RoundedCornerShape(18.dp),
+        ) { Text("重试保存") }
+        Text("保存成功前不能离开，以免这次录音丢失。", color = Coral, modifier = Modifier.padding(top = 12.dp))
+    }
+}
 
 @Composable
 fun ChildReadingScreen(
