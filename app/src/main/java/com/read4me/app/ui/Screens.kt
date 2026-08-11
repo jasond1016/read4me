@@ -570,6 +570,7 @@ fun SetupScreen(
     onBack: () -> Unit,
     onStart: (String, RecordingMode) -> Unit,
 ) {
+    BackHandler(onBack = onBack)
     var title by remember {
         mutableStateOf("我们的故事 · ${SimpleDateFormat("M月d日", Locale.CHINA).format(Date())}")
     }
