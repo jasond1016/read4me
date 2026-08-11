@@ -563,92 +563,143 @@ fun SetupScreen(
         mutableStateOf("我们的故事 · ${SimpleDateFormat("M月d日", Locale.CHINA).format(Date())}")
     }
     Surface(Modifier.fillMaxSize(), color = Paper) {
-        Column(
-            Modifier.verticalScroll(rememberScrollState())
-                .navigationBarsPadding()
-                .padding(horizontal = 24.dp, vertical = 28.dp),
-        ) {
-            TextButton(
-                onClick = onBack,
-                contentPadding = PaddingValues(0.dp),
-                modifier = Modifier.padding(bottom = 18.dp),
+        Column(Modifier.fillMaxSize()) {
+            Row(
+                Modifier.fillMaxWidth().statusBarsPadding().height(64.dp).padding(horizontal = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                AppIcon(AppIcons.Back, null, tint = Moss)
-                Text("返回", color = Moss, modifier = Modifier.padding(start = 4.dp))
+                AppIconButton(AppIcons.Back, "返回书架", onBack, Modifier.size(48.dp), tint = Moss)
+                Text(
+                    "新建陪读",
+                    style = MaterialTheme.typography.titleLarge,
+                    color = WarmBrown,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f).padding(start = 8.dp),
+                )
+                Spacer(Modifier.size(48.dp))
             }
-            Text("准备第一次陪读", style = MaterialTheme.typography.headlineLarge)
-            Text(
-                "手机固定后，让后置摄像头看到完整的左右书面。录制过程中可以自然说话、停顿和翻页。",
-                style = MaterialTheme.typography.bodyLarge,
-                color = Ink.copy(alpha = 0.7f),
-                modifier = Modifier.padding(top = 12.dp),
-            )
-            WarmIllustration(
-                R.drawable.illustration_setup_book,
-                "准备固定手机和绘本",
-                Modifier.fillMaxWidth().height(210.dp).padding(top = 18.dp),
-            )
-
-            OutlinedTextField(
-                value = title,
-                onValueChange = { title = it },
-                label = { Text("这次故事的名字") },
-                singleLine = true,
-                keyboardActions = KeyboardActions(),
-                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = ImeAction.Done),
-                shape = RoundedCornerShape(16.dp),
-                modifier = Modifier.fillMaxWidth().padding(top = 28.dp),
-            )
-
-            PreparationNote("后置摄像头", "画质更清晰，设备屏幕仍朝上可见")
-            PreparationNote("请勿打扰", "避免来电和通知打断珍贵的录音")
-            PreparationNote("两侧光线", "减少铜版纸反光和设备阴影")
-
-            Spacer(Modifier.height(28.dp))
-            if (message != null) {
-                Text(message, color = Coral, style = MaterialTheme.typography.bodyMedium)
-                Spacer(Modifier.height(12.dp))
-            }
-            Button(
-                onClick = { onStart(title, RecordingMode.CAMERA) },
-                modifier = Modifier.fillMaxWidth().height(58.dp),
-                shape = RoundedCornerShape(18.dp),
-            ) {
-                Text("打开摄像头")
-            }
-            OutlinedButton(
-                onClick = { onStart(title, RecordingMode.MANUAL) },
-                modifier = Modifier.fillMaxWidth().padding(top = 10.dp).height(58.dp),
-                shape = RoundedCornerShape(18.dp),
-            ) {
-                Text("不开摄像头 · 手动翻页")
-            }
-            Text(
-                "只录声音，由你按键标记每次翻页；书面照片可以录完后再补拍。",
-                style = MaterialTheme.typography.bodySmall,
-                color = Ink.copy(alpha = 0.62f),
-                modifier = Modifier.padding(top = 8.dp),
-            )
-            OutlinedButton(
-                onClick = onBack,
-                modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
-                shape = RoundedCornerShape(18.dp),
-            ) {
-                Text("暂不录制")
+            BoxWithConstraints(Modifier.fillMaxSize().navigationBarsPadding()) {
+                if (maxWidth >= 700.dp) {
+                    Row(
+                        Modifier.fillMaxSize().padding(horizontal = 36.dp, vertical = 24.dp),
+                        horizontalArrangement = Arrangement.spacedBy(36.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        WarmIllustration(
+                            R.drawable.illustration_setup_book,
+                            "准备固定设备和绘本",
+                            Modifier.weight(.46f).fillMaxHeight(),
+                            ContentScale.Fit,
+                        )
+                        SetupForm(
+                            title = title,
+                            onTitleChange = { title = it },
+                            message = message,
+                            onCamera = { onStart(title, RecordingMode.CAMERA) },
+                            onManual = { onStart(title, RecordingMode.MANUAL) },
+                            modifier = Modifier.weight(.54f).fillMaxHeight(),
+                        )
+                    }
+                } else {
+                    Column(Modifier.fillMaxSize().padding(horizontal = 20.dp, vertical = 10.dp)) {
+                        Text("准备开始陪读", style = MaterialTheme.typography.headlineMedium, color = WarmBrown)
+                        Text(
+                            "使用摄像头自动识别翻页，也可以只录声音并手动标记。",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = Ink.copy(alpha = .66f),
+                            modifier = Modifier.padding(top = 4.dp),
+                        )
+                        WarmIllustration(
+                            R.drawable.illustration_setup_book,
+                            "准备固定设备和绘本",
+                            Modifier.fillMaxWidth().weight(1f).padding(vertical = 8.dp),
+                            ContentScale.Fit,
+                        )
+                        SetupForm(
+                            title = title,
+                            onTitleChange = { title = it },
+                            message = message,
+                            onCamera = { onStart(title, RecordingMode.CAMERA) },
+                            onManual = { onStart(title, RecordingMode.MANUAL) },
+                            showHeading = false,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                }
             }
         }
     }
 }
 
 @Composable
-private fun PreparationNote(title: String, detail: String) {
-    Row(Modifier.padding(top = 22.dp), verticalAlignment = Alignment.Top) {
-        Box(Modifier.padding(top = 5.dp).size(10.dp).background(Moss, CircleShape))
-        Column(Modifier.padding(start = 12.dp)) {
-            Text(title, fontWeight = FontWeight.Bold)
-            Text(detail, style = MaterialTheme.typography.bodyMedium, color = Ink.copy(alpha = 0.64f))
+private fun SetupForm(
+    title: String,
+    onTitleChange: (String) -> Unit,
+    message: String?,
+    onCamera: () -> Unit,
+    onManual: () -> Unit,
+    modifier: Modifier = Modifier,
+    showHeading: Boolean = true,
+) {
+    Column(modifier, verticalArrangement = Arrangement.Center) {
+        if (showHeading) {
+            Text("准备开始陪读", style = MaterialTheme.typography.headlineMedium, color = WarmBrown)
+            Text(
+                "使用摄像头自动识别翻页，也可以只录声音并手动标记。",
+                style = MaterialTheme.typography.bodyMedium,
+                color = Ink.copy(alpha = .66f),
+                modifier = Modifier.padding(top = 5.dp, bottom = 14.dp),
+            )
         }
+        OutlinedTextField(
+            value = title,
+            onValueChange = onTitleChange,
+            label = { Text("这次故事的名字") },
+            singleLine = true,
+            keyboardActions = KeyboardActions(),
+            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = ImeAction.Done),
+            shape = RoundedCornerShape(16.dp),
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Text(
+            "使用摄像头时",
+            style = MaterialTheme.typography.labelLarge,
+            color = Moss,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(top = 13.dp),
+        )
+        PreparationNote("后置摄像头", "画面更清晰，屏幕保持朝上")
+        PreparationNote("请勿打扰", "避免来电和通知打断录音")
+        PreparationNote("两侧光线", "减少反光和设备阴影")
+        if (message != null) {
+            Text(message, color = Coral, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp))
+        }
+        Button(
+            onClick = onCamera,
+            modifier = Modifier.fillMaxWidth().padding(top = 13.dp).height(56.dp),
+            shape = RoundedCornerShape(18.dp),
+        ) { Text("打开摄像头并录制", fontWeight = FontWeight.Bold) }
+        OutlinedButton(
+            onClick = onManual,
+            modifier = Modifier.fillMaxWidth().padding(top = 8.dp).height(54.dp),
+            shape = RoundedCornerShape(18.dp),
+        ) { Text("只录声音 · 手动翻页", color = WarmAmber, fontWeight = FontWeight.Bold) }
     }
+}
+
+@Composable
+private fun PreparationNote(title: String, detail: String) {
+    Row(Modifier.fillMaxWidth().padding(top = 7.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(8.dp).background(Moss, CircleShape))
+        Text(title, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 10.dp))
+        Text(
+            " · $detail",
+            style = MaterialTheme.typography.bodySmall,
+            color = Ink.copy(alpha = .6f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        }
 }
 
 @Composable

@@ -79,12 +79,17 @@ fun WarmTopBar(title: String, onBack: (() -> Unit)? = null) {
 }
 
 @Composable
-fun WarmIllustration(@DrawableRes resource: Int, description: String, modifier: Modifier = Modifier) {
+fun WarmIllustration(
+    @DrawableRes resource: Int,
+    description: String,
+    modifier: Modifier = Modifier,
+    contentScale: ContentScale = ContentScale.Crop,
+) {
     Image(
         painter = painterResource(resource),
         contentDescription = description,
         modifier = modifier.clip(RoundedCornerShape(26.dp)),
-        contentScale = ContentScale.Crop,
+        contentScale = contentScale,
     )
 }
 
