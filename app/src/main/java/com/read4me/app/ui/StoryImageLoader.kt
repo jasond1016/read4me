@@ -2,8 +2,10 @@ package com.read4me.app.ui
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Matrix
 import android.content.Context
 import android.util.LruCache
+import androidx.exifinterface.media.ExifInterface
 import com.read4me.app.cache.CacheKeys
 import java.io.File
 import java.nio.file.Files
@@ -13,7 +15,8 @@ import java.util.UUID
 /** Keeps camera-resolution JPEG decoding and cache churn off the UI thread. */
 object StoryImageLoader {
     private const val MAX_DIMENSION = 1_024
-    private const val FORMAT_VERSION = 1
+    // Version 2 normalizes CameraX's EXIF orientation before caching thumbnails.
+    private const val FORMAT_VERSION = 2
     private const val MAX_DISK_FILES = 1_000
     private val cache = object : LruCache<String, Bitmap>(24 * 1_024) {
         override fun sizeOf(key: String, value: Bitmap): Int = value.allocationByteCount / 1_024
@@ -38,10 +41,11 @@ object StoryImageLoader {
         while (maxOf(bounds.outWidth, bounds.outHeight) / (sampleSize * 2) >= MAX_DIMENSION) {
             sampleSize *= 2
         }
-        val bitmap = BitmapFactory.decodeFile(
+        val decoded = BitmapFactory.decodeFile(
             file.absolutePath,
             BitmapFactory.Options().apply { inSampleSize = sampleSize },
         ) ?: return null
+        val bitmap = orientForDisplay(file, decoded)
         val pending = File(diskDirectory, "${diskFile.name}.${UUID.randomUUID()}.pending")
         runCatching {
             pending.outputStream().buffered().use {
@@ -67,4 +71,20 @@ object StoryImageLoader {
     }
 
     private fun key(file: File) = "${file.absolutePath}:${file.lastModified()}:${file.length()}"
+
+    private fun orientForDisplay(file: File, source: Bitmap): Bitmap {
+        val exif = runCatching { ExifInterface(file) }.getOrNull() ?: return source
+        val rotation = exif.rotationDegrees
+        val flipped = exif.isFlipped
+        if (rotation == 0 && !flipped) return source
+        val matrix = Matrix().apply {
+            if (flipped) postScale(-1f, 1f)
+            if (rotation != 0) postRotate(rotation.toFloat())
+        }
+        return runCatching {
+            Bitmap.createBitmap(source, 0, 0, source.width, source.height, matrix, true)
+        }.getOrElse { source }.also { oriented ->
+            if (oriented !== source) source.recycle()
+        }
+    }
 }

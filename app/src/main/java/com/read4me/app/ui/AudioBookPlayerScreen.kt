@@ -28,6 +28,12 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.FilterChip
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.runtime.saveable.rememberSaveable
+import com.read4me.app.model.hasUsableAudio
+import com.read4me.app.model.hasUsablePhoto
+import com.read4me.app.model.readiness
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -71,6 +77,7 @@ fun AudioBookPlayerScreen(
     playWhenReady: Boolean = true,
     pageListBackToCaller: Boolean = false,
     onEditSpread: (String, Boolean) -> Unit = { _, _ -> },
+    onRepairSpread: (String, Boolean) -> Unit,
     onBack: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -81,7 +88,7 @@ fun AudioBookPlayerScreen(
     var playing by remember { mutableStateOf(false) }
     var speed by remember { mutableFloatStateOf(1f) }
     var expanded by remember { mutableStateOf(false) }
-    var showPages by remember(book.id) { mutableStateOf(initiallyShowPageList) }
+    var showPages by rememberSaveable(book.id) { mutableStateOf(initiallyShowPageList) }
     var showImage by remember { mutableStateOf(false) }
     val prefs = remember { context.getSharedPreferences(AudioBookPlaybackService.PREFS, Context.MODE_PRIVATE) }
     var sleepMode by remember { mutableStateOf(prefs.getString(AudioBookPlaybackService.KEY_TIMER_MODE, null)) }
@@ -135,6 +142,7 @@ fun AudioBookPlayerScreen(
     val spreadIndex = entry?.spreadIndex ?: 0
     val spread = book.spreads.getOrNull(spreadIndex)
     val wholePosition = ((entry?.bookOffsetMs ?: 0) + itemPosition).coerceIn(0, plan.durationMs)
+    var seekPreview by remember(book.id) { mutableStateOf<Float?>(null) }
     val progress = if (plan.durationMs > 0) wholePosition.toFloat() / plan.durationMs else 0f
 
     fun seekBook(positionMs: Long) {
@@ -157,6 +165,10 @@ fun AudioBookPlayerScreen(
             playing = playing,
             onBack = {
                 if (pageListBackToCaller) onBack() else showPages = false
+            },
+            onRepair = { spreadId, audio ->
+                controller?.pause()
+                onRepairSpread(spreadId, audio)
             },
             onEdit = { spreadId ->
                 val wasPlaying = controller?.isPlaying == true
@@ -224,13 +236,18 @@ fun AudioBookPlayerScreen(
                     modifier = Modifier.padding(top = 14.dp),
                 )
                 Slider(
-                    value = progress.coerceIn(0f, 1f),
-                    onValueChange = { seekBook((it * plan.durationMs).toLong()) },
+                    value = seekPreview ?: progress.coerceIn(0f, 1f),
+                    onValueChange = { seekPreview = it },
+                    onValueChangeFinished = {
+                        seekPreview?.let { seekBook((it * plan.durationMs).toLong()) }
+                        seekPreview = null
+                    },
+                    enabled = plan.durationMs > 0,
                     colors = SliderDefaults.colors(thumbColor = Moss, activeTrackColor = Honey, inactiveTrackColor = WarmLine),
                     modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                 )
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text(formatAudioTime(wholePosition), color = Moss)
+                    Text(formatAudioTime(seekPreview?.let { (it * plan.durationMs).toLong() } ?: wholePosition), color = Moss)
                     Text(formatAudioTime(plan.durationMs), color = Moss)
                 }
                 Row(
@@ -320,12 +337,12 @@ private fun PlayerPanel(
     ) {
         Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                PanelAction(AppIcons.Restart, "从头播放", onRestart, Modifier.weight(1f))
-                PanelAction(AppIcons.More, "更多", onToggle, Modifier.weight(1f))
+                PanelAction(AppIcons.List, "逐页试听", onPages, Modifier.weight(1f))
+                PanelAction(if (expanded) AppIcons.ExpandLess else AppIcons.More, if (expanded) "收起设置" else "播放设置", onToggle, Modifier.weight(1f))
             }
             if (expanded) {
                 Row(Modifier.fillMaxWidth().padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    PanelAction(AppIcons.List, "书面列表", onPages, Modifier.weight(1f))
+                    PanelAction(AppIcons.Restart, "从头播放", onRestart, Modifier.weight(1f))
                     PanelAction(AppIcons.Timer, sleepMode?.let(::sleepLabel) ?: "定时关闭", onTimer, Modifier.weight(1f))
                     PanelAction(AppIcons.Speed, "${speedLabel(speed)}x 倍速", onSpeed, Modifier.weight(1f))
                 }
@@ -364,50 +381,56 @@ private fun PageListScreen(
     playing: Boolean,
     onBack: () -> Unit,
     onEdit: (String) -> Unit,
+    onRepair: (String, Boolean) -> Unit,
     onSelect: (Int) -> Unit,
 ) {
+    var repairsOnly by rememberSaveable(book.id) { mutableStateOf(false) }
+    val repairs = book.spreads.filter { !it.hasUsableAudio || !it.hasUsablePhoto }
+    val visible = if (repairsOnly) repairs else book.spreads
     Surface(Modifier.fillMaxSize(), color = WarmPaper) {
-        Column {
-            Row(Modifier.fillMaxWidth().statusBarsPadding().height(64.dp).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                AppIconButton(AppIcons.Back, "返回播放器", onBack, Modifier.size(48.dp), tint = Ink)
-                Text("书面列表", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f), textAlign = TextAlign.Center)
-                Spacer(Modifier.size(48.dp))
+        Column(Modifier.fillMaxSize().statusBarsPadding()) {
+            WarmTopBar("逐页试听与修复", onBack)
+            Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(selected = !repairsOnly, onClick = { repairsOnly = false }, label = { Text("全部 ${book.spreads.size}") })
+                FilterChip(selected = repairsOnly, onClick = { repairsOnly = true }, label = { Text("待处理 ${repairs.size}") })
             }
-            val allHavePhotos = book.spreads.all { it.references.isNotEmpty() }
-            Text(
-                "共 ${book.spreads.size} 个书面 · ${if (allHavePhotos) "均有参考照片" else "部分书面缺少参考照片"}",
-                color = Ink.copy(.64f), modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp),
-            )
+            Text("点书面试听；照片可以稍后补拍。", color = Moss, modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp))
             LazyColumn(
                 Modifier.fillMaxSize().navigationBarsPadding(),
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                items(book.spreads, key = { it.spreadId }) { spread ->
+                if (visible.isEmpty()) item {
+                    Text(if (repairsOnly) "照片和录音都齐了，放心听吧。" else "还没有书面，先录下第一段声音吧。", modifier = Modifier.padding(20.dp), color = Moss)
+                }
+                items(visible, key = { it.spreadId }) { spread ->
                     val index = spread.ordinal - 1
-                    val playable = spread.effectiveSegments.isNotEmpty() && spread.effectiveSegments.all { it.file.isFile }
+                    val playable = spread.hasUsableAudio
+                    val needsPhoto = !spread.hasUsablePhoto
                     var menu by remember(spread.spreadId) { mutableStateOf(false) }
-                    Surface(
-                        Modifier.fillMaxWidth().clickable(enabled = playable) { onSelect(index) },
-                        shape = RoundedCornerShape(18.dp),
-                        color = if (index == selected) Honey.copy(.25f) else SoftWhite,
-                    ) {
-                        Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                            StoryImage(spread.imageFile, Modifier.size(width = 86.dp, height = 64.dp))
-                            Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
-                                Text("第 ${spread.ordinal} 页 / 书面 ${spread.ordinal}", fontWeight = if (index == selected) FontWeight.Bold else FontWeight.Medium)
-                                Text(formatAudioTime(spread.durationMs), color = Ink.copy(.6f))
-                            }
-                            if (playable) {
-                                AppIcon(if (index == selected && playing) AppIcons.Pause else AppIcons.Play, if (index == selected && playing) "暂停" else "播放", tint = if (index == selected) Honey else Moss)
-                            } else {
-                                Text("无音频", color = Ink.copy(.45f), style = MaterialTheme.typography.labelSmall)
-                            }
-                            Box {
-                                AppIconButton(AppIcons.More, "书面 ${spread.ordinal} 更多操作", { menu = true }, Modifier.size(48.dp), tint = Ink)
-                                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                                    DropdownMenuItem(text = { Text("编辑声音") }, onClick = { menu = false; onEdit(spread.spreadId) })
+                    WarmCard(Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(12.dp)) {
+                            Row(Modifier.fillMaxWidth().clickable(enabled = playable) { onSelect(index) }.heightIn(min = 72.dp), verticalAlignment = Alignment.CenterVertically) {
+                                StoryImage(spread.references.firstOrNull { it.file.isFile }?.file, Modifier.size(width = 72.dp, height = 64.dp))
+                                Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                                    Text("书面 ${spread.ordinal}", fontWeight = FontWeight.Bold)
+                                    Text(when {
+                                        !playable -> "需要补录声音"
+                                        index == selected && playing -> "正在试听 · ${formatAudioTime(spread.durationMs)}"
+                                        else -> formatAudioTime(spread.durationMs)
+                                    }, color = Moss, style = MaterialTheme.typography.bodyMedium)
                                 }
+                                if (playable) AppIcon(if (index == selected && playing) AppIcons.Pause else AppIcons.Play, if (index == selected && playing) "暂停" else "试听", tint = Moss)
+                                Box {
+                                    AppIconButton(AppIcons.More, "书面 ${spread.ordinal} 更多操作", { menu = true }, Modifier.size(48.dp), tint = Ink)
+                                    DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                                        DropdownMenuItem(text = { Text("调整录音或重录") }, onClick = { menu = false; onEdit(spread.spreadId) })
+                                    }
+                                }
+                            }
+                            if (!playable || needsPhoto) Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                Text(if (!playable) "补录后即可播放" else "不影响整本播放", modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, color = Moss)
+                                TextButton(onClick = { onRepair(spread.spreadId, !playable) }) { Text(if (!playable) "补录声音" else "补拍照片") }
                             }
                         }
                     }

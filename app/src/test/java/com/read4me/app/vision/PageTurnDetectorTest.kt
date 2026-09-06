@@ -44,5 +44,25 @@ class PageTurnDetectorTest {
         }
     }
 
+    @Test
+    fun resetMakesTheFirstFrameAfterOrientationChangeTheNewBaseline() {
+        detector.accept(frame(30))
+        detector.accept(frame(90))
+        detector.reset()
+
+        assertFalse(detector.accept(frame(200)).pageTurned)
+        repeat(6) { assertFalse(detector.accept(frame(200)).pageTurned) }
+    }
+
+    @Test
+    fun resetAdvancesGenerationSoQueuedResultsCanBeRejected() {
+        val beforeReset = detector.accept(frame(30))
+        detector.reset()
+
+        val afterReset = detector.accept(frame(30))
+
+        assertTrue(afterReset.generation > beforeReset.generation)
+    }
+
     private fun frame(value: Int) = ByteArray(120) { value.toByte() }
 }

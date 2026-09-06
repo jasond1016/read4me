@@ -4,6 +4,11 @@ import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.net.Uri
+import android.provider.Settings
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -21,6 +26,9 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.read4me.app.data.StoryRepository
 import com.read4me.app.audio.PersistentWaveformCache
 import com.read4me.app.model.StoryBook
+import com.read4me.app.model.readiness
+import com.read4me.app.model.hasUsablePhoto
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import com.read4me.app.model.RecordingMode
 import com.read4me.app.ui.LibraryScreen
 import com.read4me.app.ui.InsertSpreadScreen
@@ -93,6 +101,7 @@ class MainActivity : ComponentActivity() {
             val spreadId: String,
             val returnToDetails: Boolean = false,
             val returnToPreviewSpreadId: String? = null,
+            val returnToPlayer: AudioBook? = null,
         ) : Destination
         data class Recapture(
             val book: StoryBook,
@@ -103,6 +112,7 @@ class MainActivity : ComponentActivity() {
             val returnToDetails: Boolean = false,
             val returnToPreview: Boolean = false,
             val capturePurpose: ReferenceCapturePurpose = ReferenceCapturePurpose.ADD_REFERENCE,
+            val returnToPlayer: AudioBook? = null,
         ) : Destination
         data class BatchRecapture(
             val book: StoryBook,
@@ -119,6 +129,7 @@ class MainActivity : ComponentActivity() {
             val returnToLibrary: Boolean,
             val returnToDetails: Boolean = false,
             val returnToPreview: Boolean = false,
+            val returnToPlayer: AudioBook? = null,
         ) : Destination
         data class InsertSpread(
             val baseBook: StoryBook,
@@ -156,6 +167,7 @@ class MainActivity : ComponentActivity() {
                 var archiveMessage by remember { mutableStateOf<String?>(null) }
                 var libraryInitialTab by remember { mutableStateOf(WarmShellTab.LIBRARY) }
                 val scope = rememberCoroutineScope()
+                val libraryState = rememberSaveableStateHolder()
 
                 val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
                     if (uri != null) scope.launch {
@@ -214,18 +226,20 @@ class MainActivity : ComponentActivity() {
                     } else {
                         permissionMessage =
                             if (pendingRecording?.second == RecordingMode.MANUAL ||
-                                (permissionTarget as? Destination.Recording)?.mode == RecordingMode.MANUAL
+                                (permissionTarget as? Destination.Recording)?.mode == RecordingMode.MANUAL || permissionTarget is Destination.Rerecord
                             ) {
-                                "手动翻页录制只需要麦克风权限。"
+                                "需要麦克风权限才能录音，已有内容不会受影响。"
+                            } else if (pendingRecording != null || permissionTarget is Destination.Recording) {
+                                "需要摄像头和麦克风权限才能自动记录翻页，也可以选择只录声音。"
                             } else {
-                                "需要摄像头和麦克风权限，才能记录书面与陪读声音。"
+                                "需要摄像头权限才能拍摄或识别绘本。已有录音仍可正常播放。"
                             }
                         pendingRecording = null
                     }
                 }
 
                 when (val current = destination) {
-                    Destination.Library -> LibraryScreen(
+                    Destination.Library -> libraryState.SaveableStateProvider("library") { LibraryScreen(
                         books = books,
                         trashedBooks = trashedBooks,
                         recognitionSummaries = recognitionSummaries,
@@ -347,7 +361,7 @@ class MainActivity : ComponentActivity() {
                                 permissionLauncher.launch(arrayOf(Manifest.permission.CAMERA))
                             }
                         },
-                    )
+                    ) }
 
                     is Destination.ChildReading -> ChildReadingScreen(
                         books = books,
@@ -406,7 +420,7 @@ class MainActivity : ComponentActivity() {
                         },
                         onOpenSpread = { spreadId ->
                             val spread = current.book.spreads.firstOrNull { it.spreadId == spreadId }
-                            if (spread?.references.isNullOrEmpty()) {
+                            if (spread != null && !spread.hasUsablePhoto) {
                                 val target = Destination.Recapture(
                                     current.book,
                                     spreadId,
@@ -429,9 +443,7 @@ class MainActivity : ComponentActivity() {
                             )
                         },
                         onBatchRecapture = {
-                            val missingSpreadIds = current.book.markers
-                                .filter { it.references.isEmpty() }
-                                .map { it.spreadId }
+                            val missingSpreadIds = current.book.readiness().missingPhotoIds
                             val target = Destination.BatchRecapture(
                                 current.book,
                                 missingSpreadIds,
@@ -534,6 +546,20 @@ class MainActivity : ComponentActivity() {
                             )
                         },
                         onReview = { destination = Destination.BookDetails(current.book) },
+                        onLibrary = { books = repository.loadAll(); destination = Destination.Library },
+                        onRepairPhotos = {
+                            val missing = current.book.readiness().missingPhotoIds
+                            if (missing.isNotEmpty()) {
+                                val target = Destination.BatchRecapture(current.book, missing, 0, missing.size, returnToDetails = true)
+                                if (hasCameraPermission()) destination = target
+                                else { permissionTarget = target; permissionLauncher.launch(arrayOf(Manifest.permission.CAMERA)) }
+                            }
+                        },
+                        onRepairAudio = { spreadId ->
+                            val target = Destination.Rerecord(current.book, spreadId, returnToDetails = true)
+                            if (hasAudioPermission()) destination = target
+                            else { permissionTarget = target; permissionLauncher.launch(arrayOf(Manifest.permission.RECORD_AUDIO)) }
+                        },
                     )
 
                     is Destination.Review -> ReviewScreen(
@@ -641,6 +667,16 @@ class MainActivity : ComponentActivity() {
                         initiallyShowPageList = current.initiallyShowPageList,
                         playWhenReady = current.playWhenReady,
                         pageListBackToCaller = current.pageListBackToCaller,
+                        onRepairSpread = { spreadId, audio ->
+                            val returnTo = current.copy(initiallyShowPageList = true, playWhenReady = false)
+                            val target = if (audio) Destination.Rerecord(current.book, spreadId, returnToPlayer = returnTo)
+                            else Destination.Recapture(current.book, spreadId, null, null, returnToPlayer = returnTo)
+                            if (if (audio) hasAudioPermission() else hasCameraPermission()) destination = target
+                            else {
+                                permissionTarget = target
+                                permissionLauncher.launch(arrayOf(if (audio) Manifest.permission.RECORD_AUDIO else Manifest.permission.CAMERA))
+                            }
+                        },
                         onEditSpread = { spreadId, wasPlaying ->
                             val refreshed = repository.loadAll().firstOrNull { it.id == current.book.id } ?: current.book
                             destination = Destination.Review(
@@ -666,7 +702,7 @@ class MainActivity : ComponentActivity() {
                         spreadId = current.spreadId,
                         repository = repository,
                         onCancel = {
-                            destination = current.returnToPreviewSpreadId?.let {
+                            destination = current.returnToPlayer?.copy(book = current.book) ?: current.returnToPreviewSpreadId?.let {
                                 Destination.SpreadPreview(current.book, it)
                             } ?: Destination.Review(
                                 current.book,
@@ -676,7 +712,7 @@ class MainActivity : ComponentActivity() {
                         },
                         onFinished = { updated ->
                             books = repository.loadAll()
-                            destination = current.returnToPreviewSpreadId?.let {
+                            destination = current.returnToPlayer?.copy(book = updated) ?: current.returnToPreviewSpreadId?.let {
                                 Destination.SpreadPreview(updated, it)
                             } ?: Destination.Review(
                                 updated,
@@ -692,7 +728,7 @@ class MainActivity : ComponentActivity() {
                         repository = repository,
                         capturePurpose = current.capturePurpose,
                         onCancel = {
-                            destination = if (current.returnToLibrary) Destination.Library
+                            destination = current.returnToPlayer ?: if (current.returnToLibrary) Destination.Library
                             else if (current.returnToPreview) Destination.SpreadPreview(current.book, current.spreadId)
                             else {
                                 Destination.Review(
@@ -713,6 +749,7 @@ class MainActivity : ComponentActivity() {
                                 current.returnToLibrary,
                                 returnToDetails = current.returnToDetails,
                                 returnToPreview = current.returnToPreview,
+                                returnToPlayer = current.returnToPlayer,
                             )
                         },
                     )
@@ -778,7 +815,7 @@ class MainActivity : ComponentActivity() {
                         onCancel = {
                             recognitionSummaries = recognitionHistory.summaries()
                             books = repository.loadAll()
-                            destination = if (current.returnToLibrary) Destination.Library else {
+                            destination = current.returnToPlayer?.copy(book = current.book) ?: if (current.returnToLibrary) Destination.Library else {
                                 if (current.returnToPreview) Destination.SpreadPreview(current.book, current.spreadId)
                                 else if (current.returnToDetails) Destination.BookDetails(current.book)
                                 else Destination.Review(current.book, current.undo, current.undoImage)
@@ -787,7 +824,7 @@ class MainActivity : ComponentActivity() {
                         onFinished = {
                             recognitionSummaries = recognitionHistory.summaries()
                             books = repository.loadAll()
-                            destination = if (current.returnToLibrary) Destination.Library else {
+                            destination = current.returnToPlayer?.copy(book = current.book) ?: if (current.returnToLibrary) Destination.Library else {
                                 if (current.returnToPreview) Destination.SpreadPreview(current.book, current.spreadId)
                                 else if (current.returnToDetails) Destination.BookDetails(current.book)
                                 else Destination.Review(current.book, current.undo, current.undoImage)
@@ -825,6 +862,17 @@ class MainActivity : ComponentActivity() {
                         },
                     )
                 }
+                if (permissionMessage != null && destination != Destination.Setup) AlertDialog(
+                    onDismissRequest = { permissionMessage = null; permissionTarget = null },
+                    title = { Text("还需要开启权限") },
+                    text = { Text(requireNotNull(permissionMessage)) },
+                    confirmButton = { TextButton(onClick = {
+                        permissionMessage = null
+                        permissionTarget = null
+                        startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
+                    }) { Text("去设置") } },
+                    dismissButton = { TextButton(onClick = { permissionMessage = null; permissionTarget = null }) { Text("稍后再说") } },
+                )
             }
         }
     }

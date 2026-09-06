@@ -17,8 +17,8 @@ val Honey = Color(0xFFE8A936)
 val SoftWhite = Color(0xFFFFFEFB)
 
 private val Read4MeColors = lightColorScheme(
-    primary = Honey,
-    onPrimary = Ink,
+    primary = Moss,
+    onPrimary = Color.White,
     secondary = Moss,
     onSecondary = Color.White,
     background = Paper,
@@ -26,6 +26,10 @@ private val Read4MeColors = lightColorScheme(
     surface = SoftWhite,
     onSurface = Ink,
     surfaceVariant = Color(0xFFF2E7D7),
+    onSurfaceVariant = Color(0xFF715F51),
+    secondaryContainer = Color(0xFFE5EBDD),
+    onSecondaryContainer = Ink,
+    outlineVariant = Color(0xFFEADCC8),
     outline = Color(0xFF8B7667),
 )
 

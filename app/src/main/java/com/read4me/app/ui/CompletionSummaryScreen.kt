@@ -1,6 +1,8 @@
 package com.read4me.app.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,6 +22,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.foundation.layout.heightIn
+import com.read4me.app.model.readiness
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -31,15 +36,23 @@ import androidx.compose.ui.unit.dp
 import com.read4me.app.model.StoryBook
 
 @Composable
-fun CompletionSummaryScreen(book: StoryBook, onPlay: () -> Unit, onReview: () -> Unit) {
-    val missingPhotos = book.spreads.count { it.imageFile?.isFile != true }
+fun CompletionSummaryScreen(
+    book: StoryBook,
+    onPlay: () -> Unit,
+    onReview: () -> Unit,
+    onRepairPhotos: () -> Unit,
+    onRepairAudio: (String) -> Unit,
+    onLibrary: () -> Unit,
+) {
+    val readiness = book.readiness()
+    val missingPhotos = readiness.missingPhotoIds.size
     BackHandler(onBack = onReview)
 
     Surface(Modifier.fillMaxSize(), color = WarmPaper) {
         Column(Modifier.fillMaxSize()) {
             CompletionTopBar(onReview)
             Box(
-                Modifier.fillMaxWidth().weight(1f).padding(horizontal = 24.dp, vertical = 18.dp),
+                Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 18.dp),
                 contentAlignment = Alignment.Center,
             ) {
                 Column(
@@ -47,13 +60,13 @@ fun CompletionSummaryScreen(book: StoryBook, onPlay: () -> Unit, onReview: () ->
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center,
                 ) {
-                    Surface(color = WarmMoss.copy(alpha = .14f), shape = CircleShape, modifier = Modifier.size(88.dp)) {
+                    Surface(color = WarmMoss.copy(alpha = .14f), shape = CircleShape, modifier = Modifier.size(72.dp)) {
                         Box(contentAlignment = Alignment.Center) {
                             Text("✓", color = WarmMoss, style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.Bold)
                         }
                     }
                     Text(
-                        "录音已经安全保存",
+                        if (readiness.canPlay) "录好了，现在就能听" else "绘本已保存，还有录音待补齐",
                         style = MaterialTheme.typography.headlineSmall,
                         color = WarmBrown,
                         fontWeight = FontWeight.Bold,
@@ -68,9 +81,9 @@ fun CompletionSummaryScreen(book: StoryBook, onPlay: () -> Unit, onReview: () ->
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.padding(top = 8.dp),
                     )
-                    WarmCard(Modifier.fillMaxWidth().padding(top = 26.dp)) {
+                    WarmCard(Modifier.fillMaxWidth().padding(top = 18.dp)) {
                         Row(
-                            Modifier.fillMaxWidth().padding(vertical = 20.dp),
+                            Modifier.fillMaxWidth().padding(vertical = 16.dp),
                             horizontalArrangement = Arrangement.SpaceEvenly,
                         ) {
                             SummaryStat("${book.spreads.size}", "书面")
@@ -83,8 +96,11 @@ fun CompletionSummaryScreen(book: StoryBook, onPlay: () -> Unit, onReview: () ->
                         modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
                     ) {
                         Text(
-                            if (missingPhotos == 0) "全部书面均有图片"
-                            else "还有 $missingPhotos 个书面需要补拍图片，可稍后在书籍详情中处理",
+                            when {
+                                readiness.missingAudioIds.isNotEmpty() -> "${readiness.missingAudioIds.size} 个书面的录音不可用，补录后即可整本播放。"
+                                missingPhotos > 0 -> "现在可以整本播放。补拍 $missingPhotos 个书面后，还能让孩子翻书听。"
+                                else -> "照片和录音都齐了，也可以从书架开启翻页听。"
+                            },
                             color = WarmBrown,
                             textAlign = TextAlign.Center,
                             modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 14.dp),
@@ -92,7 +108,14 @@ fun CompletionSummaryScreen(book: StoryBook, onPlay: () -> Unit, onReview: () ->
                     }
                 }
             }
-            CompletionActions(onPlay, onReview)
+            CompletionActions(
+                canPlay = readiness.canPlay,
+                missingPhotos = missingPhotos,
+                onPlay = onPlay,
+                onReview = onReview,
+                onRepair = { readiness.missingAudioIds.firstOrNull()?.let(onRepairAudio) ?: onRepairPhotos() },
+                onLibrary = onLibrary,
+            )
         }
     }
 }
@@ -118,18 +141,22 @@ private fun CompletionTopBar(onBack: () -> Unit) {
 }
 
 @Composable
-private fun CompletionActions(onPlay: () -> Unit, onReview: () -> Unit) {
+private fun CompletionActions(
+    canPlay: Boolean, missingPhotos: Int, onPlay: () -> Unit, onReview: () -> Unit,
+    onRepair: () -> Unit, onLibrary: () -> Unit,
+) {
     Surface(color = Color.White, shadowElevation = 8.dp, shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)) {
         Box(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 22.dp, vertical = 16.dp)) {
             Column(Modifier.widthIn(max = 520.dp).fillMaxWidth().align(Alignment.Center)) {
-                WarmPrimaryButton("试听整本旁白", onPlay, Modifier.fillMaxWidth(), AppIcons.Play)
+                WarmPrimaryButton(if (canPlay) "试听这本书" else "补录缺失声音", if (canPlay) onPlay else onRepair, Modifier.fillMaxWidth(), AppIcons.Play)
                 OutlinedButton(
-                    onClick = onReview,
-                    modifier = Modifier.fillMaxWidth().padding(top = 9.dp).height(52.dp),
+                    onClick = if (canPlay && missingPhotos > 0) onRepair else onReview,
+                    modifier = Modifier.fillMaxWidth().padding(top = 9.dp).heightIn(min = 52.dp),
                     shape = RoundedCornerShape(18.dp),
                 ) {
-                    Text("查看和整理书籍", color = WarmMoss, fontWeight = FontWeight.Bold)
+                    Text(if (canPlay && missingPhotos > 0) "补拍照片（$missingPhotos 个书面）" else "查看绘本", color = WarmMoss, fontWeight = FontWeight.Bold)
                 }
+                TextButton(onClick = onLibrary, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("返回书架，稍后再听") }
             }
         }
     }

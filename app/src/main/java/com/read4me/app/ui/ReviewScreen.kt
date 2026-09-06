@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -67,6 +68,8 @@ import com.read4me.app.audio.WaveformMath
 import com.read4me.app.data.StoryRepository
 import com.read4me.app.model.NarrationTimeline
 import com.read4me.app.model.StoryBook
+import com.read4me.app.model.readiness
+import com.read4me.app.model.hasUsablePhoto
 import com.read4me.app.model.StoryBookEditor
 import com.read4me.app.model.StoryEditSession
 import com.read4me.app.model.StorySpread
@@ -92,10 +95,10 @@ fun BookOverviewScreen(
 ) {
     val playbackSegments = book.spreads.flatMap { it.effectiveSegments }
     val playable = playbackSegments.isNotEmpty() && playbackSegments.all { it.file.isFile }
-    val missingPhotos = book.markers.count { it.references.isEmpty() }
+    val missingPhotos = book.readiness().missingPhotoIds.size
     BackHandler(onBack = onBack)
     Box(Modifier.fillMaxSize().background(WarmPaper)) {
-        Column(Modifier.fillMaxSize().padding(bottom = 76.dp).navigationBarsPadding()) {
+        Column(Modifier.fillMaxSize().padding(bottom = 80.dp).navigationBarsPadding()) {
             BookOverviewTopBar(
                 onBack = onBack,
                 onOrganize = onOrganize,
@@ -121,6 +124,7 @@ fun BookOverviewScreen(
                                 onContinueRecording,
                                 onPlayBook,
                                 onBrowseSpreads,
+                                onBatchRecapture,
                             )
                         }
                         OverviewPages(
@@ -147,6 +151,7 @@ fun BookOverviewScreen(
                             onContinueRecording,
                             onPlayBook,
                             onBrowseSpreads,
+                            onBatchRecapture,
                         )
                         OverviewPages(
                             book = book,
@@ -266,44 +271,34 @@ private fun BookOverviewActions(
     onContinueRecording: () -> Unit,
     onPlayBook: () -> Unit,
     onBrowseSpreads: () -> Unit,
+    onBatchRecapture: () -> Unit,
 ) {
+    val complete = book.status == StoryStatus.COMPLETE
+    val hasPhotos = book.spreads.any { spread -> spread.references.any { it.file.isFile } }
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Button(
-            onClick = if (book.status == StoryStatus.COMPLETE) onStartReading else onContinueRecording,
-            modifier = Modifier.fillMaxWidth().height(60.dp),
-            shape = RoundedCornerShape(22.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = WarmMoss, contentColor = Color.White),
+            onClick = if (complete) onPlayBook else onContinueRecording,
+            enabled = !complete || playable,
+            modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
+            shape = RoundedCornerShape(18.dp),
         ) {
-            AppIcon(
-                if (book.status == StoryStatus.COMPLETE) AppIcons.Reading else AppIcons.Restart,
-                null,
-                tint = Color.White,
-                size = 28.dp,
-            )
-            Text(
-                if (book.status == StoryStatus.COMPLETE) "开始陪读" else "继续录制",
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(start = 9.dp),
-            )
+            AppIcon(if (complete) AppIcons.Play else AppIcons.Restart, null)
+            Text(if (complete) "播放这本书" else "继续录制", fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 8.dp))
         }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            OutlinedButton(
-                onClick = onPlayBook,
-                enabled = playable,
-                modifier = Modifier.weight(1f).height(56.dp),
-                shape = RoundedCornerShape(20.dp),
-            ) {
-                AppIcon(AppIcons.Play, null, tint = WarmCoral)
-                Text("整本播放", color = WarmCoral, modifier = Modifier.padding(start = 6.dp))
-            }
-            OutlinedButton(
-                onClick = onBrowseSpreads,
-                modifier = Modifier.weight(1f).height(56.dp),
-                shape = RoundedCornerShape(20.dp),
-            ) {
-                AppIcon(AppIcons.List, null, tint = WarmMoss)
-                Text("浏览书面", color = WarmMoss, modifier = Modifier.padding(start = 6.dp))
-            }
+        if (!playable && complete) Text("暂无可播放的录音，可在书面详情中重新录制。", color = WarmMoss)
+        OutlinedButton(
+            onClick = if (!complete) onPlayBook else if (hasPhotos) onStartReading else onBatchRecapture,
+            enabled = playable,
+            modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
+            shape = RoundedCornerShape(18.dp),
+        ) {
+            AppIcon(if (complete) AppIcons.Reading else AppIcons.Play, null)
+            Text(if (!complete) "试听已录内容" else if (hasPhotos) "翻页听 · 对准纸质绘本" else "补拍照片，开启翻页听", modifier = Modifier.padding(start = 8.dp))
+        }
+        if (complete && !hasPhotos) Text("补拍书面照片后，就能让孩子翻书听录音。", style = MaterialTheme.typography.bodyMedium, color = WarmMoss)
+        TextButton(onClick = onBrowseSpreads, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
+            AppIcon(AppIcons.List, null)
+            Text("逐页试听与修复", modifier = Modifier.padding(start = 8.dp))
         }
     }
 }
@@ -756,7 +751,7 @@ private fun ReviewTopBar(
                                     undo()
                                 },
                             )
-                        val missingPhotos = book.markers.count { it.references.isEmpty() }
+                        val missingPhotos = book.readiness().missingPhotoIds.size
                         if (missingPhotos > 0)
                             DropdownMenuItem(
                                 text = { Text("批量补拍书面照片（$missingPhotos）") },

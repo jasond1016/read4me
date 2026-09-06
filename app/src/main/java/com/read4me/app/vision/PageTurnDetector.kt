@@ -16,12 +16,15 @@ class PageTurnDetector(
         val motionScore: Float,
         val isMoving: Boolean,
         val pageTurned: Boolean,
+        /** Generation of the detector baseline used for this result. */
+        val generation: Long,
     )
 
     private var previousFrame: ByteArray? = null
     private var committedSpread: ByteArray? = null
     private var moving = false
     private var stableFrames = 0
+    private var generation = 0L
 
     @Synchronized
     fun accept(signature: ByteArray): Result {
@@ -29,7 +32,7 @@ class PageTurnDetector(
         if (previous == null || previous.size != signature.size) {
             previousFrame = signature.copyOf()
             committedSpread = signature.copyOf()
-            return Result(0f, isMoving = false, pageTurned = false)
+            return Result(0f, isMoving = false, pageTurned = false, generation = generation)
         }
 
         val motionScore = difference(previous, signature)
@@ -55,20 +58,22 @@ class PageTurnDetector(
                 } ?: true
                 if (changed) {
                     committedSpread = signature.copyOf()
-                    return Result(motionScore, isMoving = false, pageTurned = true)
+                    return Result(motionScore, isMoving = false, pageTurned = true, generation = generation)
                 }
             }
         }
 
-        return Result(motionScore, isMoving = moving, pageTurned = false)
+        return Result(motionScore, isMoving = moving, pageTurned = false, generation = generation)
     }
 
     @Synchronized
-    fun reset() {
+    fun reset(): Long {
+        generation++
         previousFrame = null
         committedSpread = null
         moving = false
         stableFrames = 0
+        return generation
     }
 
     private fun difference(left: ByteArray, right: ByteArray): Float {

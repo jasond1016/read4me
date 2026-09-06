@@ -2,7 +2,9 @@ package com.read4me.app.ui
 
 import android.app.Activity
 import android.content.Intent
+import android.content.res.Configuration
 import android.os.SystemClock
+import android.view.OrientationEventListener
 import android.view.WindowManager
 import androidx.activity.compose.BackHandler
 import androidx.camera.core.CameraSelector
@@ -34,8 +36,19 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.RadioButton
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
@@ -66,6 +79,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
@@ -80,10 +94,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -91,6 +110,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
@@ -116,6 +136,8 @@ import com.read4me.app.model.SpreadReference
 import com.read4me.app.model.PhotoQuality
 import com.read4me.app.model.RecordingMode
 import com.read4me.app.model.StoryBook
+import com.read4me.app.model.readiness
+import com.read4me.app.model.hasUsablePhoto
 import com.read4me.app.model.StoryBookEditor
 import com.read4me.app.model.StorySpread
 import com.read4me.app.model.StoryStatus
@@ -139,6 +161,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
@@ -168,21 +191,24 @@ fun LibraryScreen(
     onClearMediaCache: () -> Unit,
     onRepairRecognition: (StoryBook, String) -> Unit,
 ) {
-    var shellTab by remember(initialShellTab) { mutableStateOf(initialShellTab) }
-    var filter by remember { mutableStateOf("全部") }
+    var shellTab by rememberSaveable(initialShellTab) { mutableStateOf(initialShellTab) }
+    var filter by rememberSaveable { mutableStateOf("全部") }
+    var showReadingHelp by remember { mutableStateOf(false) }
+    val shelfState = rememberSaveableStateHolder()
+    LaunchedEffect(initialShellTab) { shellTab = initialShellTab }
     BackHandler(enabled = shellTab == WarmShellTab.ME) { shellTab = WarmShellTab.LIBRARY }
     Box(Modifier.fillMaxSize().background(WarmPaper)) {
         Surface(
-            Modifier.fillMaxSize().padding(bottom = 76.dp).statusBarsPadding().navigationBarsPadding(),
+            Modifier.fillMaxSize().padding(bottom = 80.dp).statusBarsPadding().navigationBarsPadding(),
             color = WarmPaper,
         ) {
             BoxWithConstraints {
                 val wide = maxWidth >= 700.dp
                 if (shellTab == WarmShellTab.LIBRARY) {
-                    LibraryHome(
+                    shelfState.SaveableStateProvider("shelf") { LibraryHome(
                         books, recognitionSummaries, filter, { filter = it }, wide, onCreateBook,
                         onOpenBook, onPlayBook, onContinueBook, onExport, onRename, onMoveToTrash,
-                    )
+                    ) }
                 } else {
                     Column(
                         Modifier.fillMaxSize().verticalScroll(rememberScrollState())
@@ -200,12 +226,26 @@ fun LibraryScreen(
         }
         WarmBottomShell(shellTab, Modifier.align(Alignment.BottomCenter)) { tab ->
             when (tab) {
-                WarmShellTab.READING -> onChildMode()
+                WarmShellTab.READING -> {
+                    if (books.any { book -> isPlayableBook(book) && book.spreads.any { spread -> spread.references.any { it.file.isFile } } }) onChildMode()
+                    else showReadingHelp = true
+                }
                 WarmShellTab.RECORD -> onCreateBook()
                 else -> shellTab = tab
             }
         }
     }
+    if (showReadingHelp) AlertDialog(
+        onDismissRequest = { showReadingHelp = false },
+        title = { Text("让孩子翻书就能听") },
+        text = { Text(if (books.isEmpty()) "先录一本绘本，拍下书面并留下你的声音。录完后，对准绘本就会自动播放。" else "翻页听需要已完成的录音和书面照片。请先完成录制，或进入绘本详情补拍照片。") },
+        confirmButton = {
+            TextButton(onClick = { showReadingHelp = false; if (books.isEmpty()) onCreateBook() else { shellTab = WarmShellTab.LIBRARY; filter = "全部" } }) {
+                Text(if (books.isEmpty()) "录第一本绘本" else "去书架看看")
+            }
+        },
+        dismissButton = { TextButton(onClick = { showReadingHelp = false }) { Text("稍后再说") } },
+    )
 }
 
 @Composable
@@ -223,8 +263,9 @@ private fun LibraryHome(
     onRename: (StoryBook, String) -> Unit,
     onMoveToTrash: (StoryBook) -> Unit,
 ) {
-    var query by remember { mutableStateOf("") }
-    val repairBookIds = recognitionSummaries.filter { it.needsNewReference }.map { it.bookId }.toSet()
+    var query by rememberSaveable { mutableStateOf("") }
+    val repairBookIds = recognitionSummaries.filter { it.needsNewReference }.map { it.bookId }.toSet() +
+        books.filter { it.readiness().missingPhotoIds.isNotEmpty() }.map { it.id }
     val visible = books.filter { book ->
         book.title.contains(query.trim(), ignoreCase = true) && when (filter) {
             "已完成" -> book.status == StoryStatus.COMPLETE
@@ -263,19 +304,31 @@ private fun LibraryHome(
         }
     }
     val shelfHeader: @Composable () -> Unit = {
-        Text("我的书架", style = MaterialTheme.typography.headlineLarge, color = Ink, fontWeight = FontWeight.Bold)
-        OutlinedTextField(
-            value = query,
-            onValueChange = { query = it },
-            modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
-            singleLine = true,
-            shape = RoundedCornerShape(18.dp),
-            placeholder = { Text("搜索本地绘本名称") },
-        )
-        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(vertical = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            listOf("全部", "已完成", "录制中", "待补拍").forEach { label ->
-                val selected = filter == label
-                Button(onClick = { onFilter(label) }, colors = ButtonDefaults.buttonColors(containerColor = if (selected) Moss else SoftWhite, contentColor = if (selected) Color.White else Ink), contentPadding = PaddingValues(horizontal = 15.dp, vertical = 8.dp)) { Text(label) }
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("我的书架", style = MaterialTheme.typography.headlineLarge, color = Ink, fontWeight = FontWeight.Bold)
+                Text(if (books.isEmpty()) "把你的声音，留给孩子" else "${books.size} 本绘本 · 声音保存在本机", style = MaterialTheme.typography.bodyMedium, color = Moss)
+            }
+            if (books.isNotEmpty()) TextButton(onClick = onCreateBook) {
+                AppIcon(AppIcons.Add, null)
+                Text("录新书")
+            }
+        }
+        if (books.isNotEmpty()) {
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+                singleLine = true,
+                shape = RoundedCornerShape(18.dp),
+                placeholder = { Text("搜索绘本") },
+                trailingIcon = { if (query.isNotEmpty()) TextButton(onClick = { query = "" }) { Text("清除") } },
+            )
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(vertical = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf("全部", "已完成", "录制中", "待补拍").forEach { label ->
+                    val selected = filter == label
+                    FilterChip(selected = selected, onClick = { onFilter(label) }, label = { Text(label) })
+                }
             }
         }
     }
@@ -285,10 +338,16 @@ private fun LibraryHome(
     val padding = PaddingValues(horizontal = if (wide) 36.dp else 20.dp, vertical = 24.dp)
     if (wide) {
         Row(Modifier.fillMaxSize().padding(padding), horizontalArrangement = Arrangement.spacedBy(28.dp), verticalAlignment = Alignment.Top) {
-            Box(Modifier.weight(.88f)) { left() }
+            Box(Modifier.weight(.88f).verticalScroll(rememberScrollState())) { left() }
             LazyColumn(Modifier.weight(1.12f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 item { shelfHeader() }
-                if (books.isNotEmpty() && visible.isEmpty()) item { Text("这里暂时没有绘本", color = Ink.copy(.58f), modifier = Modifier.padding(vertical = 28.dp)) }
+                if (books.isNotEmpty() && visible.isEmpty()) item {
+                    Column(Modifier.fillMaxWidth().padding(vertical = 24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(if (query.isNotBlank()) "没有找到“${query.trim()}”" else "暂无${filter}的绘本", fontWeight = FontWeight.Bold)
+                        Text("换个名称，或查看全部绘本", color = Moss, modifier = Modifier.padding(top = 6.dp))
+                        TextButton(onClick = { query = ""; onFilter("全部") }) { Text("查看全部") }
+                    }
+                }
                 items(visible, key = { it.id }) { bookCard(it) }
                 item { Spacer(Modifier.height(36.dp)) }
             }
@@ -309,7 +368,13 @@ private fun LibraryHome(
                     WarmPrimaryButton("录下第一本绘本", onCreateBook, Modifier.fillMaxWidth().padding(top = 14.dp), AppIcons.Add)
                 }
             }
-            if (books.isNotEmpty() && visible.isEmpty()) item { Text("这里暂时没有绘本", color = Ink.copy(.58f), modifier = Modifier.padding(vertical = 28.dp)) }
+            if (books.isNotEmpty() && visible.isEmpty()) item {
+                    Column(Modifier.fillMaxWidth().padding(vertical = 24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(if (query.isNotBlank()) "没有找到“${query.trim()}”" else "暂无${filter}的绘本", fontWeight = FontWeight.Bold)
+                        Text("换个名称，或查看全部绘本", color = Moss, modifier = Modifier.padding(top = 6.dp))
+                        TextButton(onClick = { query = ""; onFilter("全部") }) { Text("查看全部") }
+                    }
+                }
             items(visible.chunked(2), key = { row -> row.joinToString(":") { it.id } }) { row ->
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.Top) {
                     row.forEach { book -> Box(Modifier.weight(1f)) { bookCard(book) } }
@@ -337,7 +402,7 @@ private fun LibraryMaintenance(
     onRestore: (StoryRepository.TrashedBook) -> Unit,
     onPermanentlyDelete: (StoryRepository.TrashedBook) -> Unit,
 ) {
-    Text("我的", style = MaterialTheme.typography.displayLarge, color = Ink)
+    Text("管理", style = MaterialTheme.typography.headlineLarge, color = Ink)
     Text("备份与本机维护", color = Ink.copy(.62f), modifier = Modifier.padding(bottom = 18.dp))
     val maintenance: @Composable () -> Unit = {
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -384,8 +449,7 @@ private fun LibraryMaintenance(
 }
 
 private fun isPlayableBook(book: StoryBook): Boolean =
-    book.status == StoryStatus.COMPLETE && book.spreads.any { it.effectiveSegments.isNotEmpty() } &&
-        book.spreads.flatMap { it.effectiveSegments }.all { it.file.isFile }
+    book.status == StoryStatus.COMPLETE && book.readiness().canPlay
 
 @Composable
 private fun EmptyLibraryCard() {
@@ -571,149 +635,75 @@ fun SetupScreen(
     onStart: (String, RecordingMode) -> Unit,
 ) {
     BackHandler(onBack = onBack)
-    var title by remember {
+    var title by rememberSaveable {
         mutableStateOf("我们的故事 · ${SimpleDateFormat("M月d日", Locale.CHINA).format(Date())}")
     }
+    var mode by rememberSaveable { mutableStateOf(RecordingMode.CAMERA) }
+    val focusManager = LocalFocusManager.current
     Surface(Modifier.fillMaxSize(), color = Paper) {
-        Column(Modifier.fillMaxSize()) {
-            Row(
-                Modifier.fillMaxWidth().statusBarsPadding().height(64.dp).padding(horizontal = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
+        Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding()) {
+            WarmTopBar("录一本新书", onBack)
+            Column(
+                Modifier.weight(1f).verticalScroll(rememberScrollState())
+                    .widthIn(max = 600.dp).fillMaxWidth().align(Alignment.CenterHorizontally)
+                    .padding(horizontal = 24.dp, vertical = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(18.dp),
             ) {
-                AppIconButton(AppIcons.Back, "返回书架", onBack, Modifier.size(48.dp), tint = Moss)
-                Text(
-                    "新建陪读",
-                    style = MaterialTheme.typography.titleLarge,
-                    color = WarmBrown,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.weight(1f).padding(start = 8.dp),
+                Text("读一次，随时听", style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Bold)
+                Text("选好录制方式，下一步就可以开始。", color = Moss)
+                OutlinedTextField(
+                    value = title, onValueChange = { title = it },
+                    label = { Text("绘本名称") }, singleLine = true,
+                    keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = ImeAction.Done),
+                    shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth(),
+                    supportingText = { Text("之后也可以在书架中重命名") },
                 )
-                Spacer(Modifier.size(48.dp))
-            }
-            BoxWithConstraints(Modifier.fillMaxSize().navigationBarsPadding()) {
-                if (maxWidth >= 700.dp) {
-                    Row(
-                        Modifier.fillMaxSize().padding(horizontal = 36.dp, vertical = 24.dp),
-                        horizontalArrangement = Arrangement.spacedBy(36.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        WarmIllustration(
-                            R.drawable.illustration_setup_book,
-                            "准备固定设备和绘本",
-                            Modifier.weight(.46f).fillMaxHeight(),
-                            ContentScale.Fit,
-                        )
-                        Box(Modifier.weight(.54f).fillMaxHeight(), contentAlignment = Alignment.Center) {
-                            SetupForm(
-                                title = title,
-                                onTitleChange = { title = it },
-                                message = message,
-                                onCamera = { onStart(title, RecordingMode.CAMERA) },
-                                onManual = { onStart(title, RecordingMode.MANUAL) },
-                                modifier = Modifier.widthIn(max = 560.dp).fillMaxSize(),
-                            )
-                        }
-                    }
-                } else {
-                    Column(Modifier.fillMaxSize().padding(horizontal = 20.dp, vertical = 10.dp)) {
-                        Text("准备开始陪读", style = MaterialTheme.typography.headlineMedium, color = WarmBrown)
-                        Text(
-                            "使用摄像头自动识别翻页，也可以只录声音并手动标记。",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = Ink.copy(alpha = .66f),
-                            modifier = Modifier.padding(top = 4.dp),
-                        )
-                        WarmIllustration(
-                            R.drawable.illustration_setup_book,
-                            "准备固定设备和绘本",
-                            Modifier.fillMaxWidth().weight(1f).padding(vertical = 8.dp),
-                            ContentScale.Fit,
-                        )
-                        SetupForm(
-                            title = title,
-                            onTitleChange = { title = it },
-                            message = message,
-                            onCamera = { onStart(title, RecordingMode.CAMERA) },
-                            onManual = { onStart(title, RecordingMode.MANUAL) },
-                            showHeading = false,
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                    }
+                Text("录制方式", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Column(Modifier.selectableGroup(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    RecordingModeOption(
+                        "自动记录翻页 · 推荐", "拍下书面并自动分段，孩子翻书就能听。", mode == RecordingMode.CAMERA,
+                    ) { mode = RecordingMode.CAMERA }
+                    RecordingModeOption(
+                        "只录声音", "无需摄像头；每次翻页时，点一下按钮分段。", mode == RecordingMode.MANUAL,
+                    ) { mode = RecordingMode.MANUAL }
                 }
+                Surface(color = Moss.copy(alpha = .08f), shape = RoundedCornerShape(16.dp)) {
+                    Text(
+                        if (mode == RecordingMode.CAMERA) "把设备固定在绘本上方，让整页进入画面，并保持光线均匀。下一步可预览画面，准备好后再开始录音。"
+                        else "只需要麦克风权限。录完即可整本播放，之后补拍书面也能使用翻页听。",
+                        modifier = Modifier.padding(16.dp), style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+                if (message != null) Text(message, color = MaterialTheme.colorScheme.error)
+            }
+            Column(Modifier.widthIn(max = 600.dp).fillMaxWidth().align(Alignment.CenterHorizontally).padding(horizontal = 24.dp, vertical = 12.dp)) {
+                WarmPrimaryButton(
+                    if (mode == RecordingMode.CAMERA) "下一步：对准绘本" else "下一步：准备录音",
+                    { focusManager.clearFocus(); onStart(title.trim().ifBlank { "我们的故事" }, mode) },
+                    Modifier.fillMaxWidth(), AppIcons.Forward,
+                )
             }
         }
     }
 }
 
 @Composable
-private fun SetupForm(
-    title: String,
-    onTitleChange: (String) -> Unit,
-    message: String?,
-    onCamera: () -> Unit,
-    onManual: () -> Unit,
-    modifier: Modifier = Modifier,
-    showHeading: Boolean = true,
-) {
-    Column(modifier, verticalArrangement = Arrangement.Center) {
-        if (showHeading) {
-            Text("准备开始陪读", style = MaterialTheme.typography.headlineMedium, color = WarmBrown)
-            Text(
-                "使用摄像头自动识别翻页，也可以只录声音并手动标记。",
-                style = MaterialTheme.typography.bodyMedium,
-                color = Ink.copy(alpha = .66f),
-                modifier = Modifier.padding(top = 5.dp, bottom = 14.dp),
-            )
+private fun RecordingModeOption(title: String, detail: String, selected: Boolean, onSelect: () -> Unit) {
+    Surface(
+        color = if (selected) Honey.copy(alpha = .12f) else SoftWhite,
+        shape = RoundedCornerShape(18.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, if (selected) Moss else WarmLine),
+        modifier = Modifier.fillMaxWidth().selectable(selected = selected, role = Role.RadioButton, onClick = onSelect),
+    ) {
+        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            RadioButton(selected = selected, onClick = null)
+            Column(Modifier.weight(1f).padding(start = 12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(title, fontWeight = FontWeight.Bold)
+                Text(detail, style = MaterialTheme.typography.bodyMedium, color = Moss)
+            }
         }
-        OutlinedTextField(
-            value = title,
-            onValueChange = onTitleChange,
-            label = { Text("这次故事的名字") },
-            singleLine = true,
-            keyboardActions = KeyboardActions(),
-            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = ImeAction.Done),
-            shape = RoundedCornerShape(16.dp),
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Text(
-            "使用摄像头时",
-            style = MaterialTheme.typography.labelLarge,
-            color = Moss,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(top = 13.dp),
-        )
-        PreparationNote("后置摄像头", "画面更清晰，屏幕保持朝上")
-        PreparationNote("请勿打扰", "避免来电和通知打断录音")
-        PreparationNote("两侧光线", "减少反光和设备阴影")
-        if (message != null) {
-            Text(message, color = Coral, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp))
-        }
-        Button(
-            onClick = onCamera,
-            modifier = Modifier.fillMaxWidth().padding(top = 13.dp).height(56.dp),
-            shape = RoundedCornerShape(18.dp),
-        ) { Text("打开摄像头并录制", fontWeight = FontWeight.Bold) }
-        OutlinedButton(
-            onClick = onManual,
-            modifier = Modifier.fillMaxWidth().padding(top = 8.dp).height(54.dp),
-            shape = RoundedCornerShape(18.dp),
-        ) { Text("只录声音 · 手动翻页", color = WarmAmber, fontWeight = FontWeight.Bold) }
     }
-}
-
-@Composable
-private fun PreparationNote(title: String, detail: String) {
-    Row(Modifier.fillMaxWidth().padding(top = 7.dp), verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(8.dp).background(Moss, CircleShape))
-        Text(title, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 10.dp))
-        Text(
-            " · $detail",
-            style = MaterialTheme.typography.bodySmall,
-            color = Ink.copy(alpha = .6f),
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        }
 }
 
 @Composable
@@ -728,6 +718,268 @@ private fun BookGuideFrame(active: Boolean, modifier: Modifier = Modifier) {
                 shape = RoundedCornerShape(24.dp),
             ),
     )
+}
+
+@Composable
+private fun CaptureFramingSelector(
+    framing: CaptureFraming,
+    onFramingChange: (CaptureFraming) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val isLandscape = androidx.compose.ui.platform.LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
+    Surface(
+        modifier = modifier,
+        color = Ink.copy(alpha = .76f),
+        shape = RoundedCornerShape(20.dp),
+        shadowElevation = 4.dp,
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Row(Modifier.padding(3.dp), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                CaptureFraming.entries.forEach { option ->
+                    val selected = option == framing
+                    Surface(
+                        color = if (selected) WarmCoral else Color.Transparent,
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier.clickable { onFramingChange(option) },
+                    ) {
+                        Text(
+                            option.label,
+                            color = Color.White,
+                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                            style = MaterialTheme.typography.labelMedium,
+                            modifier = Modifier.padding(horizontal = 11.dp, vertical = 6.dp),
+                        )
+                    }
+                }
+            }
+            Text(
+                if (framing == CaptureFraming.TWO_PAGE_SPREAD && !isLandscape) "横屏拍双页更清晰 · ↑顶部朝上 · 书脊居中"
+                else if (framing == CaptureFraming.TWO_PAGE_SPREAD) "↑ 文字顶部朝上 · 书脊对准中线"
+                else "↑ 文字顶部朝上 · 只放入这一页",
+                color = Color.White.copy(alpha = .9f),
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(start = 10.dp, end = 10.dp, bottom = 5.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun BookCaptureGuide(
+    framing: CaptureFraming,
+    active: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    Box(modifier.fillMaxSize()) {
+        val guideColor = if (active) Honey else Color.White.copy(alpha = .94f)
+        Canvas(Modifier.fillMaxSize()) {
+            val strokeWidth = 3.dp.toPx()
+            val shadowWidth = 7.dp.toPx()
+            val shadowColor = Ink.copy(alpha = .72f)
+            val inset = strokeWidth / 2f
+            val cornerLength = minOf(30.dp.toPx(), size.minDimension * .18f)
+            val right = size.width - inset
+            val bottom = size.height - inset
+            val top = inset
+            val left = inset
+
+            fun guideLine(start: Offset, end: Offset) {
+                drawLine(shadowColor, start, end, shadowWidth, StrokeCap.Round)
+                drawLine(guideColor, start, end, strokeWidth, StrokeCap.Round)
+            }
+
+            fun corner(x: Float, y: Float, horizontal: Float, vertical: Float) {
+                guideLine(Offset(x, y), Offset(x + horizontal, y))
+                guideLine(Offset(x, y), Offset(x, y + vertical))
+            }
+
+            corner(left, top, cornerLength, cornerLength)
+            corner(right, top, -cornerLength, cornerLength)
+            corner(left, bottom, cornerLength, -cornerLength)
+            corner(right, bottom, -cornerLength, -cornerLength)
+
+            if (framing == CaptureFraming.TWO_PAGE_SPREAD) {
+                guideLine(
+                    Offset(size.width / 2f, size.height * .08f),
+                    Offset(size.width / 2f, size.height * .92f),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun BookCaptureViewport(
+    controller: LifecycleCameraController,
+    framing: CaptureFraming,
+    active: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    BoxWithConstraints(modifier.fillMaxSize()) {
+        val targetAspect = if (androidx.compose.ui.platform.LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE) {
+            4f / 3f
+        } else {
+            3f / 4f
+        }
+        val cameraViewport = centeredCaptureFrame(maxWidth.value, maxHeight.value, targetAspect)
+        val captureFrame = centeredCaptureFrame(cameraViewport.width, cameraViewport.height, framing)
+        Box(
+            Modifier.width(cameraViewport.width.dp).height(cameraViewport.height.dp).align(Alignment.Center).background(Ink),
+        ) {
+            Box(
+                Modifier.width(captureFrame.width.dp).height(captureFrame.height.dp).align(Alignment.Center),
+            ) {
+                AndroidView(
+                    factory = { viewContext ->
+                        PreviewView(viewContext).apply {
+                            scaleType = PreviewView.ScaleType.FILL_CENTER
+                            this.controller = controller
+                        }
+                    },
+                    modifier = Modifier.fillMaxSize(),
+                )
+                BookCaptureGuide(framing, active = active, modifier = Modifier.fillMaxSize())
+            }
+        }
+    }
+}
+
+@Composable
+private fun CaptureStatusChip(text: String) {
+    Surface(color = Ink.copy(alpha = .82f), shape = RoundedCornerShape(16.dp)) {
+        Text(
+            text,
+            color = Color.White,
+            style = MaterialTheme.typography.labelMedium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+        )
+    }
+}
+
+@Composable
+private fun CaptureShutter(
+    label: String,
+    contentDescription: String,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    circular: Boolean,
+) {
+    if (circular) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(
+                onClick = onClick,
+                enabled = enabled,
+                modifier = Modifier.size(64.dp).semantics { this.contentDescription = contentDescription },
+                shape = CircleShape,
+                contentPadding = PaddingValues(0.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = WarmAmber, contentColor = WarmBrown),
+            ) { Text("拍", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleLarge) }
+            Text(
+                label,
+                color = Color.White,
+                style = MaterialTheme.typography.labelMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.widthIn(max = 112.dp),
+            )
+        }
+    } else {
+        Button(
+            onClick = onClick,
+            enabled = enabled,
+            modifier = Modifier.widthIn(max = 280.dp).fillMaxWidth().height(58.dp)
+                .semantics { this.contentDescription = contentDescription },
+            shape = RoundedCornerShape(29.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = WarmAmber, contentColor = WarmBrown),
+        ) {
+            Text(label, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+    }
+}
+
+private typealias CaptureContent = @Composable () -> Unit
+
+@Composable
+private fun BookCaptureScaffold(
+    controller: LifecycleCameraController,
+    framing: CaptureFraming,
+    active: Boolean,
+    onBack: () -> Unit,
+    backContentDescription: String,
+    onFramingChange: (CaptureFraming) -> Unit,
+    portraitBottomInset: Dp,
+    landscapeStartRailWidth: Dp,
+    landscapeEndRailWidth: Dp,
+    topStatus: String? = null,
+    portraitTopEnd: CaptureContent? = null,
+    landscapeStartExtra: CaptureContent = {},
+    portraitControls: CaptureContent,
+    landscapeControls: CaptureContent,
+) {
+    val isLandscape = androidx.compose.ui.platform.LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
+    Box(Modifier.fillMaxSize().background(Ink).safeDrawingPadding()) {
+        BookCaptureViewport(
+            controller = controller,
+            framing = framing,
+            active = active,
+            modifier = Modifier.fillMaxSize().then(
+                if (isLandscape) Modifier.padding(start = landscapeStartRailWidth, end = landscapeEndRailWidth)
+                else Modifier.padding(bottom = portraitBottomInset),
+            ),
+        )
+        if (isLandscape) {
+            Column(
+                Modifier.align(Alignment.CenterStart).width(landscapeStartRailWidth).padding(horizontal = 12.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Surface(color = Ink.copy(alpha = .76f), shape = CircleShape) {
+                    AppIconButton(AppIcons.Back, backContentDescription, onBack, Modifier.size(48.dp), tint = Color.White)
+                }
+                Spacer(Modifier.height(10.dp))
+                CaptureFramingSelector(framing, onFramingChange)
+                if (topStatus != null) {
+                    Spacer(Modifier.height(10.dp))
+                    CaptureStatusChip(topStatus)
+                }
+                landscapeStartExtra()
+            }
+            Column(
+                Modifier.align(Alignment.CenterEnd).width(landscapeEndRailWidth).padding(horizontal = 12.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) { landscapeControls() }
+        } else {
+            Surface(
+                color = Ink.copy(alpha = .76f),
+                shape = CircleShape,
+                modifier = Modifier.align(Alignment.TopStart).padding(12.dp),
+            ) {
+                AppIconButton(AppIcons.Back, backContentDescription, onBack, Modifier.size(48.dp), tint = Color.White)
+            }
+            portraitTopEnd?.let { content ->
+                Box(Modifier.align(Alignment.TopEnd).padding(12.dp)) { content() }
+            }
+            topStatus?.let {
+                Surface(
+                    color = Ink.copy(alpha = .82f),
+                    shape = RoundedCornerShape(20.dp),
+                    modifier = Modifier.align(Alignment.TopCenter).padding(top = 14.dp),
+                ) { Text(it, color = Color.White, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp)) }
+            }
+            CaptureFramingSelector(
+                framing,
+                onFramingChange,
+                Modifier.align(Alignment.TopCenter).padding(top = if (topStatus == null) 14.dp else 58.dp),
+            )
+            Column(
+                Modifier.align(Alignment.BottomCenter).padding(horizontal = 12.dp, vertical = 8.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) { portraitControls() }
+        }
+    }
 }
 
 @Composable
@@ -844,7 +1096,19 @@ private fun ChildReadingStatus(
             }
         }
         Column(Modifier.weight(1f)) {
-            Text(status, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+            Text(status, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
+            Text(
+                when (phase) {
+                    ChildReadingPhase.NO_BOOKS -> "先录完一本绘本，并为书面补拍照片。"
+                    ChildReadingPhase.LOOKING -> "让整页进入取景框，手移开，保持光线均匀。"
+                    ChildReadingPhase.CONFIRMING -> "已经看到绘本，请保持不动。"
+                    ChildReadingPhase.PLAYING -> "正在播放这一页的录音。"
+                    ChildReadingPhase.MOVED -> "把整页放回框里，停稳后会继续识别。"
+                    ChildReadingPhase.PAUSED -> "点播放继续听，也可以翻到下一页。"
+                    ChildReadingPhase.FINISHED -> "这一页听完了，翻到下一页继续。"
+                }, style = MaterialTheme.typography.bodyMedium, color = Moss,
+                modifier = Modifier.padding(top = 4.dp),
+            )
             if (book != null && spread != null) {
                 Text(
                     if (phase == ChildReadingPhase.MOVED) {
@@ -899,6 +1163,21 @@ fun RecordingScreen(
         } else null
     }
     val detector = remember { PageTurnDetector() }
+    val orientation = androidx.compose.ui.platform.LocalConfiguration.current.orientation
+    val appliedOrientation = remember { AtomicInteger(orientation) }
+    val automaticPageTurnsFrozen = remember { AtomicBoolean(true) }
+    val automaticGateInitialized = remember { AtomicBoolean(false) }
+    val allowedDetectorGeneration = remember { AtomicLong(Long.MIN_VALUE) }
+    val stableDetectorGeneration = remember { AtomicLong(Long.MIN_VALUE) }
+    val stableFrameCount = remember { AtomicInteger(0) }
+    val stableFrameWidth = remember { AtomicInteger(0) }
+    val stableFrameHeight = remember { AtomicInteger(0) }
+    val settleNotBeforeMs = remember { AtomicLong(0L) }
+    val postOrientationGuardUntilMs = remember { AtomicLong(0L) }
+    val sensorStableAngle = remember { AtomicInteger(-1) }
+    val sensorStableBucket = remember { AtomicInteger(-1) }
+    val sensorLatestAngle = remember { AtomicInteger(-1) }
+    val sensorTransitionLatched = remember { AtomicBoolean(false) }
     val recorder = remember { StoryAudioRecorder(context) }
     var draft by remember(book.id) { mutableStateOf(book) }
     val markers = remember(book.id) { mutableStateListOf<SpreadMarker>().apply { addAll(book.markers) } }
@@ -925,7 +1204,6 @@ fun RecordingScreen(
     var quickCorrectionUntil by remember { mutableLongStateOf(0L) }
     var uiNow by remember { mutableLongStateOf(SystemClock.elapsedRealtime()) }
     var pendingCorrectionSpreadId by remember { mutableStateOf<String?>(null) }
-    var confirmCompleteRecording by remember { mutableStateOf(false) }
     var captureMessage by remember(book.id) {
         mutableStateOf(
             if (phase == RecordingPhase.SAVE_FAILED) "上次保存未完成，请重试"
@@ -935,12 +1213,116 @@ fun RecordingScreen(
     }
     var latestFingerprint by remember { mutableStateOf<ByteArray?>(null) }
     var isFrontCamera by remember { mutableStateOf(false) }
+    var captureFraming by remember(book.id) {
+        mutableStateOf(if (markers.isEmpty()) CaptureFraming.SINGLE_PAGE else CaptureFraming.TWO_PAGE_SPREAD)
+    }
     var ignorePageTurnsUntil by remember { mutableLongStateOf(0L) }
+
+    fun beginOrientationTransition() {
+        automaticPageTurnsFrozen.set(true)
+        sensorTransitionLatched.set(true)
+        val transitionAt = SystemClock.elapsedRealtime()
+        settleNotBeforeMs.set(transitionAt + 3_000L)
+        postOrientationGuardUntilMs.set(transitionAt + 8_000L)
+        allowedDetectorGeneration.set(Long.MIN_VALUE)
+        stableFrameCount.set(0)
+        stableFrameWidth.set(0)
+        stableFrameHeight.set(0)
+        stableDetectorGeneration.set(detector.reset())
+        latestFingerprint = null
+        isMoving = false
+        motionScore = 0f
+    }
+
+    fun markSensorDirectionStable() {
+        val latestAngle = sensorLatestAngle.get()
+        sensorStableAngle.set(latestAngle)
+        sensorStableBucket.set(orientationBucketForAngle(latestAngle) ?: -1)
+        sensorTransitionLatched.set(false)
+    }
+
+    SideEffect {
+        val firstComposition = !automaticGateInitialized.getAndSet(true)
+        val orientationChanged = appliedOrientation.getAndSet(orientation) != orientation
+        if (firstComposition) {
+            val resetGeneration = detector.reset()
+            automaticPageTurnsFrozen.set(false)
+            sensorTransitionLatched.set(false)
+            allowedDetectorGeneration.set(resetGeneration)
+            stableDetectorGeneration.set(resetGeneration)
+            settleNotBeforeMs.set(0L)
+            postOrientationGuardUntilMs.set(0L)
+            stableFrameCount.set(0)
+            stableFrameWidth.set(0)
+            stableFrameHeight.set(0)
+        } else if (orientationChanged && mode == RecordingMode.CAMERA) {
+            beginOrientationTransition()
+        }
+    }
+
+    DisposableEffect(context, lifecycleOwner, mode) {
+        if (mode == RecordingMode.CAMERA) {
+            val listener = object : OrientationEventListener(context) {
+                override fun onOrientationChanged(angleDegrees: Int) {
+                    val bucket = orientationBucketForAngle(angleDegrees) ?: return
+                    sensorLatestAngle.set(angleDegrees)
+                    if (sensorStableAngle.get() < 0) {
+                        sensorStableAngle.set(angleDegrees)
+                        sensorStableBucket.set(bucket)
+                    }
+                    val configurationBucket = if (
+                        context.resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+                    ) {
+                        ORIENTATION_BUCKET_LANDSCAPE
+                    } else {
+                        ORIENTATION_BUCKET_PORTRAIT
+                    }
+                    if (
+                        shouldFreezeForOrientation(
+                            angleDegrees = angleDegrees,
+                            stableAngleDegrees = sensorStableAngle.get(),
+                            stableBucket = sensorStableBucket.get().takeIf { it >= 0 },
+                            configurationBucket = configurationBucket,
+                        ) && sensorTransitionLatched.compareAndSet(false, true)
+                    ) {
+                        beginOrientationTransition()
+                    }
+                }
+            }
+            val observer = LifecycleEventObserver { _, event ->
+                when (event) {
+                    Lifecycle.Event.ON_RESUME -> if (listener.canDetectOrientation()) listener.enable()
+                    Lifecycle.Event.ON_PAUSE,
+                    Lifecycle.Event.ON_DESTROY -> listener.disable()
+                    else -> Unit
+                }
+            }
+            lifecycleOwner.lifecycle.addObserver(observer)
+            if (
+                lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) &&
+                listener.canDetectOrientation()
+            ) {
+                listener.enable()
+            }
+            onDispose {
+                listener.disable()
+                lifecycleOwner.lifecycle.removeObserver(observer)
+            }
+        } else {
+            onDispose { }
+        }
+    }
 
     fun switchCamera() {
         val camera = controller ?: return
         val targetFront = !isFrontCamera
-        detector.reset()
+        val resetGeneration = detector.reset()
+        automaticPageTurnsFrozen.set(false)
+        settleNotBeforeMs.set(0L)
+        allowedDetectorGeneration.set(resetGeneration)
+        stableDetectorGeneration.set(resetGeneration)
+        stableFrameCount.set(0)
+        markSensorDirectionStable()
         latestFingerprint = null
         isMoving = false
         motionScore = 0f
@@ -1025,16 +1407,22 @@ fun RecordingScreen(
 
     fun complete() {
         if (phase == RecordingPhase.RECORDING && !finalizeSession()) return
-        if (phase != RecordingPhase.PAUSED) return
-        if (draft.markers.isNotEmpty() && draft.markers.all { marker ->
-                marker.references.all { it.file.isFile } && marker.segments.isNotEmpty() &&
-                    marker.segments.all { it.file.isFile }
-            }) {
+        if (phase != RecordingPhase.PAUSED && phase != RecordingPhase.READY) return
+        if (draft.readiness().canPlay) {
             persistCandidate(
                 draft.copy(status = StoryStatus.COMPLETE, resumeSpreadId = draft.markers.last().spreadId),
                 finishAfterSave = true,
             )
+        } else {
+            captureMessage = "还没有完整的录音，请继续录制后再结束。"
         }
+    }
+
+    fun leaveRecording() {
+        if (phase == RecordingPhase.SAVE_FAILED || phase == RecordingPhase.FINALIZING) return
+        if (phase == RecordingPhase.RECORDING && !finalizeSession()) return
+        if (markers.isEmpty()) repository.deleteDraft(draft)
+        onCancel()
     }
     val currentFinalize by rememberUpdatedState(::finalizeSession)
 
@@ -1107,14 +1495,21 @@ fun RecordingScreen(
                     sessionMarkerIds += spreadId
                     pendingCaptures.remove(spreadId)
                     pendingImage = null
-                    if (source == MarkerSource.INITIAL) initialCaptureReady = true
+                    if (source == MarkerSource.INITIAL) {
+                        initialCaptureReady = true
+                        captureFraming = CaptureFraming.TWO_PAGE_SPREAD
+                    }
                     if (source != MarkerSource.INITIAL) {
                         val now = SystemClock.elapsedRealtime()
                         pageFeedbackUntil = now + 2_000L
                         quickCorrectionUntil = now + 5_000L
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                     }
-                    captureMessage = if (source == MarkerSource.AUTOMATIC) "已自动进入书面 ${markers.size}" else "已进入书面 ${markers.size}"
+                    captureMessage = when (source) {
+                        MarkerSource.INITIAL -> "首个书面已保存 · 接下来默认拍左右两页，可随时切换"
+                        MarkerSource.AUTOMATIC -> "已自动进入书面 ${markers.size}"
+                        MarkerSource.MANUAL -> "已进入书面 ${markers.size}"
+                    }
                 }
 
                 override fun onError(exception: ImageCaptureException) {
@@ -1136,15 +1531,87 @@ fun RecordingScreen(
     DisposableEffect(controller, lifecycleOwner) {
         if (controller != null && analysisExecutor != null) {
             controller.bindToLifecycle(lifecycleOwner)
-            val analyzer = CameraFrameAnalyzer(detector) { result, luma, _ ->
+            val analyzer = CameraFrameAnalyzer(detector) { result, luma, grayFrame ->
+                val analyzedOrientation = context.resources.configuration.orientation
                 val fingerprint = VisualFingerprint.fromLuma(luma)
                 mainExecutor.execute {
+                    val currentOrientation = context.resources.configuration.orientation
+                    val nowMs = SystemClock.elapsedRealtime()
+                    if (
+                        analyzedOrientation != currentOrientation ||
+                            appliedOrientation.get() != currentOrientation
+                    ) {
+                        stableFrameCount.set(0)
+                        stableFrameWidth.set(0)
+                        stableFrameHeight.set(0)
+                        return@execute
+                    }
+                    if (automaticPageTurnsFrozen.get()) {
+                        if (!canAccumulateStableFrame(nowMs, settleNotBeforeMs.get())) {
+                            stableFrameCount.set(0)
+                            stableFrameWidth.set(0)
+                            stableFrameHeight.set(0)
+                        } else {
+                            val countBefore = stableFrameCount.get()
+                            val sameStableStream =
+                                result.generation == stableDetectorGeneration.get() &&
+                                    !result.isMoving &&
+                                    !result.pageTurned &&
+                                    result.motionScore <= 5f &&
+                                    (countBefore == 0 ||
+                                        (stableFrameWidth.get() == grayFrame.width &&
+                                            stableFrameHeight.get() == grayFrame.height))
+                            if (sameStableStream) {
+                                if (countBefore == 0) {
+                                    stableFrameWidth.set(grayFrame.width)
+                                    stableFrameHeight.set(grayFrame.height)
+                                }
+                                val count = stableFrameCount.incrementAndGet()
+                                val configurationBucket = if (
+                                    currentOrientation == Configuration.ORIENTATION_LANDSCAPE
+                                ) {
+                                    ORIENTATION_BUCKET_LANDSCAPE
+                                } else {
+                                    ORIENTATION_BUCKET_PORTRAIT
+                                }
+                                val sensorBucket = orientationBucketForAngle(sensorLatestAngle.get())
+                                val sensorMatchesConfiguration = sensorBucket == null || sensorBucket == configurationBucket
+                                if (
+                                    count >= 4 &&
+                                    nowMs >= postOrientationGuardUntilMs.get() &&
+                                    sensorMatchesConfiguration
+                                ) {
+                                    val resumedGeneration = detector.reset()
+                                    stableDetectorGeneration.set(resumedGeneration)
+                                    allowedDetectorGeneration.set(resumedGeneration)
+                                    stableFrameCount.set(0)
+                                    automaticPageTurnsFrozen.set(false)
+                                    markSensorDirectionStable()
+                                }
+                            } else {
+                                stableFrameCount.set(0)
+                                stableFrameWidth.set(0)
+                                stableFrameHeight.set(0)
+                            }
+                        }
+                    }
                     latestFingerprint = fingerprint
                     motionScore = result.motionScore
                     isMoving = result.isMoving
                     if (
-                        result.pageTurned &&
-                            SystemClock.elapsedRealtime() >= ignorePageTurnsUntil &&
+                        shouldCommitAutomaticPageTurn(
+                            pageTurned = result.pageTurned,
+                            nowMs = nowMs,
+                            suppressUntilMs = ignorePageTurnsUntil,
+                            settleNotBeforeMs = settleNotBeforeMs.get(),
+                            postOrientationGuardUntilMs = postOrientationGuardUntilMs.get(),
+                            analyzedOrientation = analyzedOrientation,
+                            currentOrientation = currentOrientation,
+                            appliedOrientation = appliedOrientation.get(),
+                            automaticPageTurnsFrozen = automaticPageTurnsFrozen.get(),
+                            detectorGeneration = result.generation,
+                            allowedDetectorGeneration = allowedDetectorGeneration.get(),
+                        ) &&
                             phase == RecordingPhase.RECORDING &&
                             initialCaptureReady
                     ) {
@@ -1179,12 +1646,7 @@ fun RecordingScreen(
         }
     }
 
-    BackHandler {
-        if (phase != RecordingPhase.SAVE_FAILED) {
-            if (phase == RecordingPhase.RECORDING && !finalizeSession()) return@BackHandler
-            onCancel()
-        }
-    }
+    BackHandler(onBack = ::leaveRecording)
 
     LaunchedEffect(isRecording) {
         while (isRecording) {
@@ -1196,7 +1658,13 @@ fun RecordingScreen(
     }
 
     fun resumeRecording() {
-        detector.reset()
+        val resetGeneration = detector.reset()
+        automaticPageTurnsFrozen.set(false)
+        settleNotBeforeMs.set(0L)
+        allowedDetectorGeneration.set(resetGeneration)
+        stableDetectorGeneration.set(resetGeneration)
+        stableFrameCount.set(0)
+        markSensorDirectionStable()
         val file = repository.recordingFile(draft)
         recorder.start(file)
         sessionFile = file
@@ -1241,10 +1709,7 @@ fun RecordingScreen(
                     amplitude = amplitude,
                     pageJustChanged = uiNow < pageFeedbackUntil,
                     canUndo = canUndoManualPage,
-                    onBack = {
-                        finalizeSession()
-                        if (phase == RecordingPhase.PAUSED) onCancel()
-                    },
+                    onBack = ::leaveRecording,
                     onNextPage = {
                         val markerCount = markers.size
                         captureMarker(if (initialCaptureReady) MarkerSource.MANUAL else MarkerSource.INITIAL)
@@ -1252,7 +1717,7 @@ fun RecordingScreen(
                     },
                     onUndo = { pendingCorrectionSpreadId = sessionMarkerIds.lastOrNull() },
                     onPause = { finalizeSession() },
-                    onComplete = { confirmCompleteRecording = true },
+                    onComplete = ::complete,
                 )
                 RecordingPhase.FINALIZING -> ManualRecordingSaving()
                 RecordingPhase.SAVE_FAILED -> ManualRecordingSaveFailed(
@@ -1261,16 +1726,13 @@ fun RecordingScreen(
                 )
                 RecordingPhase.READY,
                 RecordingPhase.PAUSED -> ManualRecordingPaused(
-                    hasRecording = markers.any { it.segments.isNotEmpty() },
                     pageCount = markers.size,
                     durationMs = draft.playableDurationMs,
-                    isNew = markers.isEmpty(),
+                    mode = mode,
+                    message = captureMessage,
                     onResume = ::resumeRecording,
-                    onComplete = { confirmCompleteRecording = true },
-                    onReturnToLibrary = {
-                        if (markers.isEmpty()) repository.deleteDraft(draft)
-                        onCancel()
-                    },
+                    onComplete = ::complete,
+                    onReturnToLibrary = ::leaveRecording,
                 )
             }
         } else {
@@ -1282,12 +1744,14 @@ fun RecordingScreen(
                     message = captureMessage,
                     onRetry = { recovery.pendingCandidate?.let { persistCandidate(it, recovery.finishAfterSave) } },
                 )
-                RecordingPhase.PAUSED -> CameraRecordingPaused(
+                RecordingPhase.PAUSED -> ManualRecordingPaused(
+                    mode = mode,
+                    message = captureMessage,
                     pageCount = markers.size,
                     durationMs = draft.playableDurationMs,
                     onResume = ::resumeRecording,
-                    onComplete = { confirmCompleteRecording = true },
-                    onReturnToLibrary = onCancel,
+                    onComplete = ::complete,
+                    onReturnToLibrary = ::leaveRecording,
                 )
                 RecordingPhase.READY,
                 RecordingPhase.RECORDING -> CameraRecordingWorkspace(
@@ -1303,21 +1767,18 @@ fun RecordingScreen(
                     captureInProgress = pendingCaptures.isNotEmpty(),
                     pageJustChanged = uiNow < pageFeedbackUntil,
                     showQuickCorrection = canCorrectPage && uiNow < quickCorrectionUntil,
+                    orientationGuardActive = isRecording && uiNow < postOrientationGuardUntilMs.get(),
                     canCorrectPage = canCorrectPage,
                     captureMessage = captureMessage,
-                    onBack = {
-                        val readyToLeave = !isRecording || finalizeSession()
-                        if (readyToLeave) {
-                            if (markers.isEmpty()) repository.deleteDraft(draft)
-                            onCancel()
-                        }
-                    },
+                    captureFraming = captureFraming,
+                    onCaptureFramingChange = { captureFraming = it },
+                    onBack = ::leaveRecording,
                     onSwitchCamera = ::switchCamera,
                     onStart = ::resumeRecording,
                     onMarkPage = { captureMarker(if (initialCaptureReady) MarkerSource.MANUAL else MarkerSource.INITIAL) },
                     onCorrectPage = { pendingCorrectionSpreadId = sessionMarkerIds.lastOrNull() },
                     onPause = { finalizeSession() },
-                    onComplete = { confirmCompleteRecording = true },
+                    onComplete = ::complete,
                 )
             }
         }
@@ -1342,22 +1803,7 @@ fun RecordingScreen(
             dismissButton = { TextButton(onClick = { pendingCorrectionSpreadId = null }) { Text("取消") } },
         )
     }
-    if (confirmCompleteRecording) {
-        AlertDialog(
-            onDismissRequest = { confirmCompleteRecording = false },
-            title = { Text("整本书已经录完了吗？") },
-            text = { Text("完成后会进入书籍整理；如果只是暂时离开，请选择“暂停并安全保存”。") },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        confirmCompleteRecording = false
-                        complete()
-                    },
-                ) { Text("确认录完", color = Moss, fontWeight = FontWeight.Bold) }
-            },
-            dismissButton = { TextButton(onClick = { confirmCompleteRecording = false }) { Text("继续录制") } },
-        )
-    }
+
 }
 
 @Composable
@@ -1374,8 +1820,11 @@ private fun CameraRecordingWorkspace(
     captureInProgress: Boolean,
     pageJustChanged: Boolean,
     showQuickCorrection: Boolean,
+    orientationGuardActive: Boolean,
     canCorrectPage: Boolean,
     captureMessage: String,
+    captureFraming: CaptureFraming,
+    onCaptureFramingChange: (CaptureFraming) -> Unit,
     onBack: () -> Unit,
     onSwitchCamera: () -> Unit,
     onStart: () -> Unit,
@@ -1385,24 +1834,51 @@ private fun CameraRecordingWorkspace(
     onComplete: () -> Unit,
 ) {
     BoxWithConstraints(Modifier.fillMaxSize().background(Ink)) {
-        val useSidePanel = maxWidth > maxHeight
-        val compactSidePanel = useSidePanel && maxHeight < 600.dp
-        val sidePanelWidth = if (maxWidth >= 840.dp) 430.dp else (maxWidth * .48f).coerceIn(320.dp, 400.dp)
-        val preview: @Composable (Modifier) -> Unit = { modifier ->
-            CameraPreviewPane(
-                controller = controller,
-                isRecording = isRecording,
-                isFrontCamera = isFrontCamera,
-                isMoving = isMoving,
-                canSwitchCamera = !captureInProgress,
-                elapsedMs = elapsedMs,
-                page = page,
-                onBack = onBack,
-                onSwitchCamera = onSwitchCamera,
-                modifier = modifier,
-            )
-        }
-        val controls: @Composable (Modifier) -> Unit = { modifier ->
+        val isLandscape = androidx.compose.ui.platform.LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
+        val compactRail = isLandscape && maxHeight < 600.dp
+        val startRailWidth = (maxWidth * .22f).coerceIn(130.dp, 190.dp)
+        val endRailWidth = (maxWidth * .30f).coerceIn(180.dp, 300.dp)
+        BookCaptureScaffold(
+            controller = controller,
+            framing = captureFraming,
+            active = isMoving,
+            onBack = onBack,
+            backContentDescription = "暂停并返回",
+            onFramingChange = onCaptureFramingChange,
+            portraitBottomInset = 220.dp,
+            landscapeStartRailWidth = startRailWidth,
+            landscapeEndRailWidth = endRailWidth,
+            topStatus = if (isRecording) "● ${formatDuration(elapsedMs)} · 当前书面 $page" else "校准书面位置",
+            portraitTopEnd = @Composable {
+                if (!captureInProgress) {
+                    Surface(color = Ink.copy(alpha = .76f), shape = CircleShape) {
+                        AppIconButton(
+                            AppIcons.CameraSwitch,
+                            if (isFrontCamera) "切换到后置摄像头" else "切换到前置摄像头",
+                            onSwitchCamera,
+                            Modifier.size(48.dp),
+                            tint = Color.White,
+                            iconSize = 27.dp,
+                        )
+                    }
+                }
+            },
+            landscapeStartExtra = @Composable {
+                if (!captureInProgress) {
+                    Spacer(Modifier.height(10.dp))
+                    Surface(color = Ink.copy(alpha = .76f), shape = CircleShape) {
+                        AppIconButton(
+                            AppIcons.CameraSwitch,
+                            if (isFrontCamera) "切换到后置摄像头" else "切换到前置摄像头",
+                            onSwitchCamera,
+                            Modifier.size(48.dp),
+                            tint = Color.White,
+                            iconSize = 27.dp,
+                        )
+                    }
+                }
+            },
+            portraitControls = @Composable {
             CameraRecordingControls(
                 isRecording = isRecording,
                 isMoving = isMoving,
@@ -1414,6 +1890,7 @@ private fun CameraRecordingWorkspace(
                 captureInProgress = captureInProgress,
                 pageJustChanged = pageJustChanged,
                 showQuickCorrection = showQuickCorrection,
+                orientationGuardActive = orientationGuardActive,
                 canCorrectPage = canCorrectPage,
                 captureMessage = captureMessage,
                 onStart = onStart,
@@ -1421,84 +1898,35 @@ private fun CameraRecordingWorkspace(
                 onCorrectPage = onCorrectPage,
                 onPause = onPause,
                 onComplete = onComplete,
-                fillAvailableHeight = useSidePanel,
-                compact = compactSidePanel,
-                modifier = modifier,
+                compact = false,
+                rail = false,
             )
-        }
-        if (useSidePanel) {
-            Row(Modifier.fillMaxSize()) {
-                preview(Modifier.weight(1f).fillMaxHeight())
-                controls(Modifier.width(sidePanelWidth).fillMaxHeight())
-            }
-        } else {
-            Column(Modifier.fillMaxSize()) {
-                preview(Modifier.fillMaxWidth().weight(1f))
-                controls(Modifier.fillMaxWidth())
-            }
-        }
-    }
-}
-
-@Composable
-private fun CameraPreviewPane(
-    controller: LifecycleCameraController,
-    isRecording: Boolean,
-    isFrontCamera: Boolean,
-    isMoving: Boolean,
-    canSwitchCamera: Boolean,
-    elapsedMs: Long,
-    page: Int,
-    onBack: () -> Unit,
-    onSwitchCamera: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Box(modifier.background(Ink)) {
-        AndroidView(
-            factory = { viewContext ->
-                PreviewView(viewContext).apply {
-                    scaleType = PreviewView.ScaleType.FILL_CENTER
-                    this.controller = controller
-                }
             },
-            modifier = Modifier.fillMaxSize(),
-        )
-        BookGuideFrame(active = isMoving, modifier = Modifier.align(Alignment.Center))
-        Surface(
-            color = Ink.copy(alpha = .76f),
-            shape = CircleShape,
-            modifier = Modifier.align(Alignment.TopStart).statusBarsPadding().padding(top = 10.dp, start = 12.dp),
-        ) {
-            AppIconButton(AppIcons.Back, "暂停并返回", onBack, Modifier.size(48.dp), tint = Color.White)
-        }
-        if (canSwitchCamera) {
-            Surface(
-                color = Ink.copy(alpha = .76f),
-                shape = CircleShape,
-                modifier = Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(top = 10.dp, end = 12.dp),
-            ) {
-                AppIconButton(
-                    AppIcons.CameraSwitch,
-                    if (isFrontCamera) "切换到后置摄像头" else "切换到前置摄像头",
-                    onSwitchCamera,
-                    Modifier.size(48.dp),
-                    tint = Color.White,
-                    iconSize = 27.dp,
+            landscapeControls = @Composable {
+                CameraRecordingControls(
+                    isRecording = isRecording,
+                    isMoving = isMoving,
+                    amplitude = amplitude,
+                    elapsedMs = elapsedMs,
+                    page = page,
+                    cameraReady = cameraReady,
+                    initialCaptureReady = initialCaptureReady,
+                    captureInProgress = captureInProgress,
+                    pageJustChanged = pageJustChanged,
+                    showQuickCorrection = showQuickCorrection,
+                    orientationGuardActive = orientationGuardActive,
+                    canCorrectPage = canCorrectPage,
+                    captureMessage = captureMessage,
+                    onStart = onStart,
+                    onMarkPage = onMarkPage,
+                    onCorrectPage = onCorrectPage,
+                    onPause = onPause,
+                    onComplete = onComplete,
+                    compact = compactRail,
+                    rail = true,
                 )
-            }
-        }
-        Surface(
-            color = Ink.copy(alpha = .82f),
-            shape = RoundedCornerShape(20.dp),
-            modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = 14.dp),
-        ) {
-            Text(
-                if (isRecording) "● ${formatDuration(elapsedMs)} · 当前书面 $page" else "校准书面位置",
-                color = if (isRecording) Color(0xFFFFB2A4) else Color.White,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp),
-            )
-        }
+            },
+        )
     }
 }
 
@@ -1514,6 +1942,7 @@ private fun CameraRecordingControls(
     captureInProgress: Boolean,
     pageJustChanged: Boolean,
     showQuickCorrection: Boolean,
+    orientationGuardActive: Boolean,
     canCorrectPage: Boolean,
     captureMessage: String,
     onStart: () -> Unit,
@@ -1521,47 +1950,57 @@ private fun CameraRecordingControls(
     onCorrectPage: () -> Unit,
     onPause: () -> Unit,
     onComplete: () -> Unit,
-    fillAvailableHeight: Boolean,
     compact: Boolean,
+    rail: Boolean,
     modifier: Modifier = Modifier,
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
-    Surface(modifier, color = Paper, shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)) {
-        val panelModifier = if (fillAvailableHeight) Modifier.fillMaxSize().statusBarsPadding() else Modifier.fillMaxWidth()
+    val statusText = when {
+        captureInProgress -> "正在保存新书面……"
+        orientationGuardActive -> "正在适配方向 · 自动翻页稍后恢复"
+        pageJustChanged -> "✓ 已进入书面 $page"
+        isMoving -> "检测到翻页 · 请等待画面稳定"
+        isRecording -> "书面 $page · 等待翻页"
+        else -> "让书面完整清晰地进入取景框"
+    }
+    val showError = captureMessage.contains("失败") || captureMessage.contains("无法") ||
+        captureMessage.contains("不可用") || captureMessage.contains("没有可用")
+    val railTextColor = if (rail) Color.White else WarmBrown
+    Surface(
+        modifier,
+        color = if (rail) Ink.copy(alpha = .78f) else Paper.copy(alpha = .97f),
+        shape = RoundedCornerShape(24.dp),
+        shadowElevation = 8.dp,
+    ) {
         Box(
-            panelModifier.navigationBarsPadding().padding(
-                horizontal = if (compact) 16.dp else 22.dp,
-                vertical = if (compact) 10.dp else 18.dp,
+            Modifier.fillMaxWidth().padding(
+                horizontal = if (compact) 14.dp else 16.dp,
+                vertical = if (compact) 9.dp else 12.dp,
             ),
         ) {
             Column(
                 Modifier.widthIn(max = 560.dp).fillMaxWidth().align(Alignment.Center),
                 verticalArrangement = Arrangement.Center,
             ) {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            if (isRecording) "当前书面 $page" else "准备开始陪读",
-                            style = MaterialTheme.typography.headlineSmall,
-                            color = WarmBrown,
-                            fontWeight = FontWeight.Bold,
-                        )
-                        Text(
-                            when {
-                                captureInProgress -> "正在保存新书面……"
-                                pageJustChanged -> "✓ 已进入书面 $page"
-                                isMoving -> "检测到翻页动作 · 等待画面稳定"
-                                isRecording -> "等待翻页，稳定后会自动识别"
-                                else -> "确认绘本完整清晰地位于取景框内"
-                            },
-                            color = if (pageJustChanged) WarmMoss else WarmBrown.copy(alpha = .64f),
-                            fontWeight = if (pageJustChanged) FontWeight.Bold else FontWeight.Normal,
-                            modifier = Modifier.padding(top = 4.dp),
-                        )
-                    }
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        statusText,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = if (pageJustChanged && !rail) WarmMoss else railTextColor,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
                     if (isRecording && canCorrectPage) {
                         Box {
-                            AppIconButton(AppIcons.More, "更多录制操作", { menuExpanded = true }, tint = WarmBrown)
+                            AppIconButton(
+                                AppIcons.More,
+                                "更多录制操作",
+                                { menuExpanded = true },
+                                Modifier.size(42.dp),
+                                tint = WarmBrown,
+                            )
                             DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
                                 DropdownMenuItem(
                                     text = {
@@ -1579,7 +2018,7 @@ private fun CameraRecordingControls(
                 if (isRecording) {
                     if (!compact) {
                         Box(
-                            Modifier.fillMaxWidth().padding(top = 14.dp).height(8.dp).clip(CircleShape)
+                            Modifier.fillMaxWidth().padding(top = 7.dp).height(5.dp).clip(CircleShape)
                                 .background(Color(0xFFE2D8C9)),
                         ) {
                             Box(Modifier.fillMaxWidth(amplitude.coerceIn(.04f, 1f)).fillMaxHeight().background(Coral, CircleShape))
@@ -1588,8 +2027,8 @@ private fun CameraRecordingControls(
                     Button(
                         onClick = onMarkPage,
                         enabled = !captureInProgress && !pageJustChanged,
-                        modifier = Modifier.fillMaxWidth().padding(top = 16.dp).height(60.dp),
-                        shape = RoundedCornerShape(20.dp),
+                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp).height(52.dp),
+                        shape = RoundedCornerShape(17.dp),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = WarmCoral,
                             disabledContainerColor = if (pageJustChanged) WarmMoss else WarmCoral.copy(alpha = .45f),
@@ -1600,7 +2039,7 @@ private fun CameraRecordingControls(
                             when {
                                 captureInProgress -> "正在保存新书面……"
                                 pageJustChanged -> "✓ 已进入书面 $page"
-                                initialCaptureReady -> "手动标记为书面 ${page + 1}"
+                                initialCaptureReady -> "漏记翻页？点这里补记"
                                 else -> "重试保存第一个书面"
                             },
                             fontWeight = FontWeight.Bold,
@@ -1608,7 +2047,7 @@ private fun CameraRecordingControls(
                     }
                     if (showQuickCorrection) {
                         Row(
-                            Modifier.fillMaxWidth().padding(top = 4.dp),
+                            Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.Center,
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
@@ -1617,87 +2056,42 @@ private fun CameraRecordingControls(
                         }
                     }
                     Row(
-                        Modifier.fillMaxWidth().padding(top = if (showQuickCorrection) 0.dp else 10.dp),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        Modifier.fillMaxWidth().padding(top = if (showQuickCorrection) 0.dp else 6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         OutlinedButton(
                             onClick = onPause,
                             enabled = !captureInProgress,
-                            modifier = Modifier.weight(1f).height(52.dp),
-                            shape = RoundedCornerShape(17.dp),
-                        ) { Text("暂停并保存", color = WarmBrown) }
+                            modifier = Modifier.weight(1f).height(44.dp),
+                            shape = RoundedCornerShape(15.dp),
+                        ) { Text("暂停", color = railTextColor) }
                         Button(
                             onClick = onComplete,
                             enabled = initialCaptureReady && !captureInProgress && elapsedMs >= 800L,
-                            modifier = Modifier.weight(1f).height(52.dp),
-                            shape = RoundedCornerShape(17.dp),
+                            modifier = Modifier.weight(1f).height(44.dp),
+                            shape = RoundedCornerShape(15.dp),
                             colors = ButtonDefaults.buttonColors(containerColor = WarmMoss),
-                        ) { Text("整本录完") }
+                        ) { Text("结束录制") }
                     }
                 } else {
                     Button(
                         onClick = onStart,
                         enabled = cameraReady,
-                        modifier = Modifier.fillMaxWidth().padding(top = 20.dp).height(58.dp),
-                        shape = RoundedCornerShape(19.dp),
+                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp).height(52.dp),
+                        shape = RoundedCornerShape(17.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = WarmCoral),
-                    ) { Text("● 开始陪读", fontWeight = FontWeight.Bold) }
+                    ) { Text("开始录音", fontWeight = FontWeight.Bold) }
                 }
-                if (!compact) {
+                if (!compact && showError) {
                     Text(
                         captureMessage,
                         style = MaterialTheme.typography.bodySmall,
-                        color = WarmBrown.copy(alpha = .46f),
-                        maxLines = 2,
+                        color = Coral,
+                        maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(top = 10.dp).align(Alignment.CenterHorizontally),
+                        modifier = Modifier.padding(top = 6.dp).align(Alignment.CenterHorizontally),
                     )
                 }
-            }
-        }
-    }
-}
-
-@Composable
-private fun CameraRecordingPaused(
-    pageCount: Int,
-    durationMs: Long,
-    onResume: () -> Unit,
-    onComplete: () -> Unit,
-    onReturnToLibrary: () -> Unit,
-) {
-    Box(Modifier.fillMaxSize().background(WarmPaper).statusBarsPadding().navigationBarsPadding().padding(24.dp)) {
-        Column(
-            Modifier.widthIn(max = 560.dp).fillMaxSize().align(Alignment.Center),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Text("录制已暂停", style = MaterialTheme.typography.headlineSmall, color = WarmBrown, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.weight(1f))
-            WarmIllustration(
-                R.drawable.illustration_recording_pause,
-                "录制已暂停并安全保存",
-                Modifier.fillMaxWidth().height(190.dp),
-                ContentScale.Fit,
-            )
-            Text("✓ 录音已安全保存", color = WarmMoss, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 18.dp))
-            Text("当前停在书面 $pageCount · ${formatDuration(durationMs)}", color = WarmBrown.copy(alpha = .62f), modifier = Modifier.padding(top = 7.dp))
-            Text("摄像头已关闭", color = WarmBrown.copy(alpha = .46f), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 5.dp))
-            Spacer(Modifier.weight(1f))
-            Button(
-                onClick = onResume,
-                modifier = Modifier.fillMaxWidth().height(60.dp),
-                shape = RoundedCornerShape(20.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = WarmCoral),
-            ) { Text("继续当前书面 $pageCount", fontWeight = FontWeight.Bold) }
-            if (pageCount > 0 && durationMs > 0L) {
-                OutlinedButton(
-                    onClick = onComplete,
-                    modifier = Modifier.fillMaxWidth().padding(top = 10.dp).height(54.dp),
-                    shape = RoundedCornerShape(18.dp),
-                ) { Text("整本书录制完成", color = WarmMoss) }
-            }
-            TextButton(onClick = onReturnToLibrary, modifier = Modifier.padding(top = 6.dp)) {
-                Text("返回书架，稍后继续", color = WarmBrown.copy(alpha = .7f))
             }
         }
     }
@@ -1725,12 +2119,12 @@ private fun ManualRecordingActive(
                 Modifier.fillMaxWidth().statusBarsPadding().height(64.dp).padding(horizontal = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                AppIconButton(AppIcons.Back, "暂停并返回书架", onBack, Modifier.size(48.dp), tint = Color.White)
+                AppIconButton(AppIcons.Back, "保存并返回书架", onBack, Modifier.size(48.dp), tint = Color.White)
                 Column(Modifier.weight(1f).padding(start = 8.dp)) {
                     Text("手动翻页录制", color = Color.White, fontWeight = FontWeight.Bold)
                     Text("不使用摄像头", color = Color.White.copy(alpha = .62f), style = MaterialTheme.typography.labelMedium)
                 }
-                TextButton(onClick = onComplete) { Text("完成", color = Color.White, fontWeight = FontWeight.Bold) }
+                TextButton(onClick = onComplete) { Text("结束录制", color = Color.White, fontWeight = FontWeight.Bold) }
                 if (canUndo) Box {
                     AppIconButton(AppIcons.More, "更多录制操作", { menuExpanded = true }, tint = Color.White)
                     DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
@@ -1802,7 +2196,7 @@ private fun ManualRecordingActive(
                     }
                     TextButton(onClick = onPause, modifier = Modifier.padding(top = 5.dp).height(48.dp)) {
                         AppIcon(AppIcons.Pause, null, tint = WarmBrown, size = 21.dp)
-                        Text("暂停并安全保存", color = WarmBrown, modifier = Modifier.padding(start = 7.dp))
+                        Text("暂停", color = WarmBrown, modifier = Modifier.padding(start = 7.dp))
                     }
                 }
             }
@@ -1831,47 +2225,40 @@ private fun ManualRecordingSaving() {
 
 @Composable
 private fun ManualRecordingPaused(
-    hasRecording: Boolean,
     pageCount: Int,
     durationMs: Long,
-    isNew: Boolean,
+    mode: RecordingMode,
+    message: String,
     onResume: () -> Unit,
     onComplete: () -> Unit,
     onReturnToLibrary: () -> Unit,
 ) {
-    Box(Modifier.fillMaxSize().background(WarmPaper).statusBarsPadding().navigationBarsPadding().padding(24.dp)) {
-        Column(
-            Modifier.widthIn(max = 560.dp).fillMaxSize().align(Alignment.Center),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Text(if (isNew) "手动翻页录制" else "录制已暂停", style = MaterialTheme.typography.headlineSmall, color = WarmBrown, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.weight(1f))
-            WarmIllustration(
-                R.drawable.illustration_recording_pause,
-                if (isNew) "准备开始手动翻页录制" else "录制已暂停并安全保存",
-                Modifier.fillMaxWidth().height(190.dp),
-                ContentScale.Fit,
-            )
-            Text(
-                if (isNew) "录制时不会开启摄像头，读完并翻页后手动标记下一书面。" else "录音已经安全保存",
-                color = if (isNew) WarmBrown.copy(alpha = .68f) else WarmMoss,
-                modifier = Modifier.padding(top = 18.dp),
-            )
-            if (!isNew) Text("$pageCount 个书面 · ${formatDuration(durationMs)}", color = WarmBrown.copy(alpha = .58f), modifier = Modifier.padding(top = 7.dp))
-            Spacer(Modifier.weight(1f))
-            Button(
-                onClick = onResume,
-                modifier = Modifier.fillMaxWidth().height(60.dp),
-                shape = RoundedCornerShape(20.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = WarmCoral),
-            ) { Text(if (isNew) "开始录制" else "继续当前书面", fontWeight = FontWeight.Bold) }
-            if (hasRecording) {
-                OutlinedButton(onClick = onComplete, modifier = Modifier.fillMaxWidth().padding(top = 10.dp).height(54.dp), shape = RoundedCornerShape(18.dp)) {
-                    Text("整本书录制完成", color = WarmMoss)
-                }
+    val hasRecording = durationMs > 0L
+    val needsAttention = message.contains("未保存") || message.contains("还没有")
+    Surface(Modifier.fillMaxSize(), color = WarmPaper) {
+        Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
+            WarmTopBar(if (hasRecording) "录制已暂停" else "准备录音", onReturnToLibrary)
+            Column(
+                Modifier.weight(1f).verticalScroll(rememberScrollState()).widthIn(max = 560.dp)
+                    .fillMaxWidth().align(Alignment.CenterHorizontally).padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
+                WarmIllustration(R.drawable.illustration_recording_pause, "休息一下，稍后继续", Modifier.fillMaxWidth().height(160.dp), ContentScale.Fit)
+                Text(if (hasRecording) "声音已保存，放心休息" else "准备好了就开始读吧", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                if (hasRecording) Text("$pageCount 个书面 · ${formatDuration(durationMs)}", color = Moss)
+                Text(
+                    if (hasRecording) "继续录制会接在当前书面后面；返回书架也可以稍后继续。"
+                    else if (mode == RecordingMode.MANUAL) "正常朗读，每次翻页后点“下一书面”。只录声音，不开启摄像头。"
+                    else "对准绘本后开始录音，翻页会自动记录。",
+                    color = Moss,
+                )
+                if (needsAttention) Text(message, color = MaterialTheme.colorScheme.error)
             }
-            TextButton(onClick = onReturnToLibrary, modifier = Modifier.padding(top = 6.dp)) {
-                Text(if (isNew) "取消并删除空草稿" else "返回书架，稍后继续", color = WarmBrown.copy(alpha = .7f))
+            Column(Modifier.widthIn(max = 560.dp).fillMaxWidth().align(Alignment.CenterHorizontally).padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                WarmPrimaryButton(if (hasRecording) "继续录制" else "开始录音", onResume, Modifier.fillMaxWidth(), AppIcons.Play)
+                if (hasRecording) OutlinedButton(onClick = onComplete, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) { Text("录完了，去试听") }
+                TextButton(onClick = onReturnToLibrary, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text(if (hasRecording) "返回书架" else "暂不录制") }
             }
         }
     }
@@ -2433,7 +2820,16 @@ fun RecaptureScreen(
     var latestFingerprint by remember { mutableStateOf<ByteArray?>(null) }
     var capturedFingerprint by remember { mutableStateOf<ByteArray?>(null) }
     var isCapturing by remember { mutableStateOf(false) }
-    var message by remember { mutableStateOf("把完整书面放进白框后拍照") }
+    var captureFraming by remember(spreadId) {
+        mutableStateOf(if (ordinal == 1) CaptureFraming.SINGLE_PAGE else CaptureFraming.TWO_PAGE_SPREAD)
+    }
+    var message by remember { mutableStateOf("按实际内容选择单页或左右两页，再让书面完整进入框内") }
+    val captureButtonLabel = when {
+        isCapturing -> "分析并保存中"
+        progressLabel != null -> "拍下并添加 · $progressLabel"
+        capturePurpose == ReferenceCapturePurpose.REPLACE_DISPLAY_IMAGE -> "拍下并设为展示图"
+        else -> "拍下并添加"
+    }
     BackHandler(enabled = !isCapturing, onBack = onCancel)
     val fingerprintAnalyzer = remember {
         CameraFrameAnalyzer(PageTurnDetector()) { _, luma, _ ->
@@ -2454,107 +2850,93 @@ fun RecaptureScreen(
         }
     }
 
-    Surface(Modifier.fillMaxSize(), color = Ink) {
-        Box(Modifier.fillMaxSize()) {
-            AndroidView(
-                factory = { viewContext ->
-                    PreviewView(viewContext).apply {
-                        scaleType = PreviewView.ScaleType.FILL_CENTER
-                        this.controller = controller
+    fun capturePhoto() {
+        if (marker == null) return
+        isCapturing = true
+        message = "正在保存新照片……"
+        val token = UUID.randomUUID().toString()
+        activeToken = token
+        capturedFingerprint = latestFingerprint?.copyOf()
+        val captureFile = File(File(book.directory, "spreads"), ".$spreadId-$token.pending.jpg")
+        pendingFile?.delete()
+        pendingFile = captureFile
+        controller.takePicture(
+            ImageCapture.OutputFileOptions.Builder(captureFile).build(),
+            mainExecutor,
+            object : ImageCapture.OnImageSavedCallback {
+                override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
+                    if (activeToken != token) { captureFile.delete(); return }
+                    message = "正在检查照片质量……"
+                    analysisExecutor.execute {
+                        val quality = PhotoQualityAnalyzer.analyze(captureFile)
+                        mainExecutor.execute {
+                            if (activeToken != token) {
+                                captureFile.delete()
+                                return@execute
+                            }
+                            var installed: File? = null
+                            runCatching {
+                                val target = repository.replaceReferenceImage(book, spreadId, captureFile)
+                                installed = target
+                                val reference = SpreadReference(target, capturedFingerprint, 2, quality)
+                                val withReference = StoryBookEditor.addReference(book, spreadId, reference)
+                                val updated = if (capturePurpose == ReferenceCapturePurpose.REPLACE_DISPLAY_IMAGE) {
+                                    StoryBookEditor.setPrimaryReference(withReference, spreadId, reference.referenceId)
+                                } else withReference
+                                repository.save(updated)
+                                updated
+                            }.onSuccess { updated -> onFinished(updated, book, requireNotNull(installed)) }.onFailure {
+                                installed?.delete()
+                                isCapturing = false
+                                message = "添加失败，原照片已保留，请重试"
+                            }
+                        }
                     }
-                },
-                modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth().aspectRatio(1.32f),
-            )
-            Box(Modifier.align(Alignment.TopCenter).fillMaxWidth().aspectRatio(1.32f)) {
-                BookGuideFrame(active = isCapturing, modifier = Modifier.align(Alignment.Center))
-            }
-            Surface(
-                color = Paper.copy(alpha = 0.97f),
-                shape = RoundedCornerShape(topStart = 30.dp, topEnd = 30.dp),
-                modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth(),
-            ) {
-                Column(
-                    Modifier.padding(24.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
-                    Text(
-                        if (progressLabel == null && capturePurpose == ReferenceCapturePurpose.REPLACE_DISPLAY_IMAGE) "更换书面 $ordinal 的展示图片"
-                        else if (progressLabel == null) "添加书面 $ordinal 的识别参考图"
-                        else "批量补拍 $progressLabel · 书面 $ordinal",
-                        style = MaterialTheme.typography.headlineLarge,
-                    )
-                    Text(message, modifier = Modifier.padding(top = 8.dp, bottom = 18.dp))
-                    Button(
-                        enabled = !isCapturing,
-                        onClick = {
-                            if (marker == null) return@Button
-                            isCapturing = true
-                            message = "正在保存新照片……"
-                            val token = UUID.randomUUID().toString()
-                            activeToken = token
-                            capturedFingerprint = latestFingerprint?.copyOf()
-                            val captureFile = File(File(book.directory, "spreads"), ".$spreadId-$token.pending.jpg")
-                            pendingFile?.delete()
-                            pendingFile = captureFile
-                            controller.takePicture(
-                                ImageCapture.OutputFileOptions.Builder(captureFile).build(),
-                                mainExecutor,
-                                object : ImageCapture.OnImageSavedCallback {
-                                    override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
-                                        if (activeToken != token) { captureFile.delete(); return }
-                                        message = "正在检查照片质量……"
-                                        analysisExecutor.execute {
-                                            val quality = PhotoQualityAnalyzer.analyze(captureFile)
-                                            mainExecutor.execute {
-                                                if (activeToken != token) {
-                                                    captureFile.delete()
-                                                    return@execute
-                                                }
-                                                var installed: File? = null
-                                                runCatching {
-                                                    val target = repository.replaceReferenceImage(book, spreadId, captureFile)
-                                                    installed = target
-                                                    val reference = SpreadReference(target, capturedFingerprint, 2, quality)
-                                                    val withReference = StoryBookEditor.addReference(book, spreadId, reference)
-                                                    val updated = if (capturePurpose == ReferenceCapturePurpose.REPLACE_DISPLAY_IMAGE) {
-                                                        StoryBookEditor.setPrimaryReference(withReference, spreadId, reference.referenceId)
-                                                    } else withReference
-                                                    repository.save(updated)
-                                                    updated
-                                                }.onSuccess { updated -> onFinished(updated, book, requireNotNull(installed)) }.onFailure {
-                                                    installed?.delete()
-                                                    isCapturing = false
-                                                    message = "添加失败，原照片已保留，请重试"
-                                                }
-                                            }
-                                        }
-                                    }
-
-                                    override fun onError(exception: ImageCaptureException) {
-                                        captureFile.delete()
-                                        if (activeToken != token) return
-                                        isCapturing = false
-                                        message = "拍照失败，原照片已保留，请重试"
-                                    }
-                                },
-                            )
-                        },
-                        modifier = Modifier.fillMaxWidth().height(56.dp),
-                        shape = RoundedCornerShape(18.dp),
-                    ) {
-                        Text(
-                            if (isCapturing) "分析并保存中"
-                            else if (capturePurpose == ReferenceCapturePurpose.REPLACE_DISPLAY_IMAGE) "拍下并设为展示图"
-                            else "拍下并添加",
-                        )
-                    }
-                    if (onSkip != null) {
-                        TextButton(enabled = !isCapturing, onClick = onSkip) { Text("跳过这个书面") }
-                    }
-                    TextButton(enabled = !isCapturing, onClick = onCancel) { Text("取消") }
                 }
-            }
-        }
+
+                override fun onError(exception: ImageCaptureException) {
+                    captureFile.delete()
+                    if (activeToken != token) return
+                    isCapturing = false
+                    message = "拍照失败，原照片已保留，请重试"
+                }
+            },
+        )
+    }
+
+    val showStatus = isCapturing || message.contains("失败")
+    Surface(Modifier.fillMaxSize(), color = Ink) {
+        BookCaptureScaffold(
+            controller = controller,
+            framing = captureFraming,
+            active = isCapturing,
+            onBack = onCancel,
+            backContentDescription = "取消拍摄",
+            onFramingChange = { captureFraming = it },
+            portraitBottomInset = 152.dp,
+            landscapeStartRailWidth = 180.dp,
+            landscapeEndRailWidth = 180.dp,
+            portraitControls = {
+                if (showStatus) {
+                    CaptureStatusChip(message)
+                    Spacer(Modifier.height(8.dp))
+                }
+                CaptureShutter(captureButtonLabel, "拍下并保存照片", !isCapturing, ::capturePhoto, circular = false)
+                if (onSkip != null) {
+                    TextButton(enabled = !isCapturing, onClick = onSkip) { Text("跳过", color = Color.White) }
+                }
+            },
+            landscapeControls = {
+                if (showStatus) {
+                    CaptureStatusChip(message)
+                    Spacer(Modifier.height(8.dp))
+                }
+                CaptureShutter(captureButtonLabel, "拍下并保存照片", !isCapturing, ::capturePhoto, circular = true)
+                if (onSkip != null) {
+                    TextButton(enabled = !isCapturing, onClick = onSkip) { Text("跳过", color = Color.White) }
+                }
+            },
+        )
     }
 }
 
@@ -2734,7 +3116,8 @@ fun InsertSpreadScreen(
     var capturedFingerprint by remember { mutableStateOf<ByteArray?>(null) }
     var photoReady by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
-    var message by remember { mutableStateOf("把完整书面放进白框后拍照") }
+    var captureFraming by remember(anchorSpreadId) { mutableStateOf(CaptureFraming.TWO_PAGE_SPREAD) }
+    var message by remember { mutableStateOf("选择拍摄范围，让要保留的书面完整进入框内") }
     var split by remember { mutableFloatStateOf((anchorDuration / 2L).toFloat()) }
     var waveform by remember { mutableStateOf<FloatArray?>(null) }
     val analyzer = remember {
@@ -2768,32 +3151,65 @@ fun InsertSpreadScreen(
             }.getOrNull()
         }
     }
-    Surface(Modifier.fillMaxSize(), color = if (photoReady) Paper else Ink) {
-        if (!photoReady) Box(Modifier.fillMaxSize()) {
-            AndroidView(
-                factory = { PreviewView(it).apply { scaleType = PreviewView.ScaleType.FILL_CENTER; this.controller = controller } },
-                modifier = Modifier.fillMaxSize(),
-            )
-            BookGuideFrame(active = latestFingerprint != null, modifier = Modifier.align(Alignment.Center))
-            Surface(Modifier.align(Alignment.BottomCenter).fillMaxWidth(), color = Paper, shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)) {
-                Column(Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("插入下一书面", style = MaterialTheme.typography.headlineLarge)
-                    Text(message, modifier = Modifier.padding(vertical = 10.dp))
-                    Button(enabled = !busy && latestFingerprint != null, onClick = {
-                        busy = true; pendingFile?.delete(); capturedFingerprint = latestFingerprint?.copyOf()
-                        val token = UUID.randomUUID().toString()
-                        activeToken = token
-                        val captureFile = File(File(book.directory, "spreads"), ".insert-$anchorSpreadId-$token.pending.jpg")
-                        pendingFile = captureFile
-                        controller.takePicture(ImageCapture.OutputFileOptions.Builder(captureFile).build(), mainExecutor,
-                            object : ImageCapture.OnImageSavedCallback {
-                                override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) { if (activeToken == token) { busy = false; photoReady = true } else captureFile.delete() }
-                                override fun onError(exception: ImageCaptureException) { captureFile.delete(); if (activeToken == token) { busy = false; message = "拍照失败，请重试" } }
-                            })
-                    }, modifier = Modifier.fillMaxWidth().height(56.dp)) { Text(if (busy) "拍摄中" else "拍下书面") }
-                    TextButton(enabled = !busy, onClick = ::cancel) { Text("取消") }
+
+    fun capturePhoto() {
+        busy = true
+        pendingFile?.delete()
+        capturedFingerprint = latestFingerprint?.copyOf()
+        val token = UUID.randomUUID().toString()
+        activeToken = token
+        val captureFile = File(File(book.directory, "spreads"), ".insert-$anchorSpreadId-$token.pending.jpg")
+        pendingFile = captureFile
+        controller.takePicture(
+            ImageCapture.OutputFileOptions.Builder(captureFile).build(),
+            mainExecutor,
+            object : ImageCapture.OnImageSavedCallback {
+                override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
+                    if (activeToken == token) {
+                        busy = false
+                        photoReady = true
+                    } else captureFile.delete()
                 }
-            }
+
+                override fun onError(exception: ImageCaptureException) {
+                    captureFile.delete()
+                    if (activeToken == token) {
+                        busy = false
+                        message = "拍照失败，请重试"
+                    }
+                }
+            },
+        )
+    }
+
+    val showStatus = busy || message.contains("失败")
+    Surface(Modifier.fillMaxSize(), color = if (photoReady) Paper else Ink) {
+        if (!photoReady) {
+            BookCaptureScaffold(
+                controller = controller,
+                framing = captureFraming,
+                active = busy,
+                onBack = ::cancel,
+                backContentDescription = "取消插入",
+                onFramingChange = { captureFraming = it },
+                portraitBottomInset = 112.dp,
+                landscapeStartRailWidth = 180.dp,
+                landscapeEndRailWidth = 180.dp,
+                portraitControls = {
+                if (showStatus) {
+                    CaptureStatusChip(if (busy) "拍摄中……" else message)
+                    Spacer(Modifier.height(8.dp))
+                }
+                CaptureShutter("拍下书面", "拍下并保存插入书面", !busy && latestFingerprint != null, ::capturePhoto, circular = false)
+            },
+            landscapeControls = {
+                if (showStatus) {
+                    CaptureStatusChip(if (busy) "拍摄中……" else message)
+                    Spacer(Modifier.height(8.dp))
+                }
+                CaptureShutter("拍下书面", "拍下并保存插入书面", !busy && latestFingerprint != null, ::capturePhoto, circular = true)
+            },
+            )
         } else Column(Modifier.fillMaxSize().padding(24.dp)) {
             Text("分配原录音", style = MaterialTheme.typography.headlineLarge)
             Text("选择新书面开始的位置：${formatBoundary(split.toLong())}", modifier = Modifier.padding(top = 8.dp))

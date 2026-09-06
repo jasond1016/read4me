@@ -2,6 +2,7 @@ package com.read4me.app.ui
 
 import androidx.annotation.DrawableRes
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -9,6 +10,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -19,6 +21,9 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -45,7 +50,8 @@ fun WarmCard(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
         modifier = modifier,
         shape = RoundedCornerShape(24.dp),
         colors = CardDefaults.cardColors(containerColor = Color(0xFFFFFEFB)),
-        elevation = CardDefaults.cardElevation(defaultElevation = 5.dp),
+        border = BorderStroke(1.dp, WarmLine),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
     ) { content() }
 }
 
@@ -53,7 +59,7 @@ fun WarmCard(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
 fun WarmPrimaryButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, icon: Int? = null) {
     Button(
         onClick = onClick,
-        modifier = modifier.height(56.dp),
+        modifier = modifier.heightIn(min = 56.dp),
         shape = RoundedCornerShape(18.dp),
         colors = ButtonDefaults.buttonColors(containerColor = WarmAmber, contentColor = WarmBrown),
     ) {
@@ -97,43 +103,24 @@ enum class WarmShellTab { LIBRARY, READING, RECORD, ME }
 
 @Composable
 fun WarmBottomShell(selected: WarmShellTab, modifier: Modifier = Modifier, onSelect: (WarmShellTab) -> Unit) {
-    Surface(modifier = modifier, color = Color(0xFFFFFEFB), shadowElevation = 12.dp) {
-        Row(
-            Modifier.fillMaxWidth().navigationBarsPadding().height(76.dp).padding(horizontal = 8.dp),
-            horizontalArrangement = Arrangement.SpaceAround,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            listOf(
-                Triple(WarmShellTab.LIBRARY, AppIcons.Library, "书架"),
-                Triple(WarmShellTab.READING, AppIcons.Reading, "陪读"),
-                Triple(WarmShellTab.RECORD, AppIcons.LibraryAdd, "录制"),
-                Triple(WarmShellTab.ME, AppIcons.Home, "我的"),
-            ).forEach { (tab, glyph, label) ->
-                val active = selected == tab
-                TextButton(
-                    onClick = { onSelect(tab) },
-                    modifier = Modifier.weight(1f).height(64.dp),
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp),
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Box(
-                            Modifier.size(30.dp).then(
-                                if (active) Modifier.background(WarmCoral.copy(alpha = .12f), CircleShape)
-                                else Modifier,
-                            ),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            AppIcon(
-                                glyph,
-                                contentDescription = null,
-                                tint = if (active) WarmCoral else WarmBrown.copy(.58f),
-                                size = 24.dp,
-                            )
-                        }
-                        Text(label, color = if (active) WarmCoral else WarmBrown.copy(.62f), style = MaterialTheme.typography.labelSmall, fontWeight = if (active) FontWeight.Bold else FontWeight.Normal)
-                    }
-                }
-            }
+    NavigationBar(modifier = modifier, containerColor = SoftWhite, tonalElevation = 0.dp) {
+        listOf(
+            Triple(WarmShellTab.LIBRARY, AppIcons.Library, "书架"),
+            Triple(WarmShellTab.READING, AppIcons.Reading, "翻页听"),
+            Triple(WarmShellTab.RECORD, AppIcons.LibraryAdd, "录新书"),
+            Triple(WarmShellTab.ME, AppIcons.Home, "管理"),
+        ).forEach { (tab, glyph, label) ->
+            NavigationBarItem(
+                selected = selected == tab,
+                onClick = { onSelect(tab) },
+                icon = { AppIcon(glyph, null) },
+                label = { Text(label) },
+                colors = NavigationBarItemDefaults.colors(
+                    selectedIconColor = Ink, selectedTextColor = Ink,
+                    indicatorColor = Honey.copy(alpha = .25f),
+                    unselectedIconColor = Moss, unselectedTextColor = Moss,
+                ),
+            )
         }
     }
 }
