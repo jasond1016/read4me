@@ -31,6 +31,9 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.SaveableStateHolder
+import androidx.compose.foundation.horizontalScroll
+import com.read4me.app.data.AndroidMediaProbe
 import com.read4me.app.model.hasUsableAudio
 import com.read4me.app.model.hasUsablePhoto
 import com.read4me.app.model.readiness
@@ -73,6 +76,7 @@ import kotlinx.coroutines.delay
 @Composable
 fun AudioBookPlayerScreen(
     book: StoryBook,
+    pageListState: SaveableStateHolder,
     initiallyShowPageList: Boolean = false,
     playWhenReady: Boolean = true,
     pageListBackToCaller: Boolean = false,
@@ -159,30 +163,32 @@ fun AudioBookPlayerScreen(
     }
 
     if (showPages) {
-        PageListScreen(
-            book = book,
-            selected = spreadIndex,
-            playing = playing,
-            onBack = {
-                if (pageListBackToCaller) onBack() else showPages = false
-            },
-            onRepair = { spreadId, audio ->
-                controller?.pause()
-                onRepairSpread(spreadId, audio)
-            },
-            onEdit = { spreadId ->
-                val wasPlaying = controller?.isPlaying == true
-                controller?.pause()
-                onEditSpread(spreadId, wasPlaying)
-            },
-        ) { index ->
-            controller?.let { player ->
-                if (index == spreadIndex) {
-                    if (player.isPlaying) player.pause() else player.play()
-                } else {
-                    plan.entries.firstOrNull { it.spreadIndex == index }?.let {
-                        player.seekTo(it.queueIndex, 0)
-                        player.play()
+        pageListState.SaveableStateProvider(book.id) {
+            PageListScreen(
+                book = book,
+                selected = spreadIndex,
+                playing = playing,
+                onBack = {
+                    if (pageListBackToCaller) onBack() else showPages = false
+                },
+                onRepair = { spreadId, audio ->
+                    controller?.pause()
+                    onRepairSpread(spreadId, audio)
+                },
+                onEdit = { spreadId ->
+                    val wasPlaying = controller?.isPlaying == true
+                    controller?.pause()
+                    onEditSpread(spreadId, wasPlaying)
+                },
+            ) { index ->
+                controller?.let { player ->
+                    if (index == spreadIndex) {
+                        if (player.isPlaying) player.pause() else player.play()
+                    } else {
+                        plan.entries.firstOrNull { it.spreadIndex == index }?.let {
+                            player.seekTo(it.queueIndex, 0)
+                            player.play()
+                        }
                     }
                 }
             }
@@ -369,7 +375,7 @@ private fun PanelAction(icon: Int, label: String, onClick: () -> Unit, modifier:
     Surface(modifier.clickable(onClick = onClick), shape = RoundedCornerShape(16.dp), color = WarmPaper) {
         Column(Modifier.padding(vertical = 11.dp, horizontal = 2.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             AppIcon(icon, null, tint = Ink)
-            Text(label, style = MaterialTheme.typography.labelSmall, color = Ink, maxLines = 1)
+            Text(label, style = MaterialTheme.typography.labelSmall, color = Ink, maxLines = 2, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
         }
     }
 }
@@ -390,7 +396,7 @@ private fun PageListScreen(
     Surface(Modifier.fillMaxSize(), color = WarmPaper) {
         Column(Modifier.fillMaxSize().statusBarsPadding()) {
             WarmTopBar("逐页试听与修复", onBack)
-            Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilterChip(selected = !repairsOnly, onClick = { repairsOnly = false }, label = { Text("全部 ${book.spreads.size}") })
                 FilterChip(selected = repairsOnly, onClick = { repairsOnly = true }, label = { Text("待处理 ${repairs.size}") })
             }
@@ -411,7 +417,7 @@ private fun PageListScreen(
                     WarmCard(Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(12.dp)) {
                             Row(Modifier.fillMaxWidth().clickable(enabled = playable) { onSelect(index) }.heightIn(min = 72.dp), verticalAlignment = Alignment.CenterVertically) {
-                                StoryImage(spread.references.firstOrNull { it.file.isFile }?.file, Modifier.size(width = 72.dp, height = 64.dp))
+                                StoryImage(spread.references.firstOrNull { AndroidMediaProbe.canReadPhoto(it.file) }?.file, Modifier.size(width = 72.dp, height = 64.dp))
                                 Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
                                     Text("书面 ${spread.ordinal}", fontWeight = FontWeight.Bold)
                                     Text(when {

@@ -6,6 +6,10 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class CaptureGeometryTest {
+    @Test fun orientationLockDoesNotContinuouslyRefreezeAStableSensorDirection() {
+        assertFalse(shouldFreezeForOrientation(90, 90, ORIENTATION_BUCKET_LANDSCAPE, ORIENTATION_BUCKET_PORTRAIT))
+        assertTrue(shouldFreezeForOrientation(115, 90, ORIENTATION_BUCKET_LANDSCAPE, ORIENTATION_BUCKET_PORTRAIT))
+    }
     @Test
     fun framingAspectRatiosMatchCaptureFormats() {
         assertEquals(0.75f, captureAspectRatio(CaptureFraming.SINGLE_PAGE), 0.0001f)

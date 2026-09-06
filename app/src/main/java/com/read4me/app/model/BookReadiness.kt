@@ -1,11 +1,22 @@
 package com.read4me.app.model
 
+import com.read4me.app.data.AndroidMediaProbe
+
 /** Check usable media, including references whose files disappeared after an import. */
 val StorySpread.hasUsablePhoto: Boolean
-    get() = references.any { it.file.isFile }
+    get() = hasUsablePhoto(AndroidMediaProbe)
 
 val StorySpread.hasUsableAudio: Boolean
-    get() = effectiveSegments.isNotEmpty() && effectiveSegments.all { it.file.isFile }
+    get() = hasUsableAudio(AndroidMediaProbe)
+
+fun StorySpread.hasUsablePhoto(probe: MediaProbe): Boolean = references.any { probe.canReadPhoto(it.file) }
+
+fun StorySpread.hasUsableAudio(probe: MediaProbe): Boolean = effectiveSegments.let { segments ->
+    segments.isNotEmpty() && segments.all { segment ->
+        val duration = probe.audioDurationMs(segment.file)
+        duration != null && segment.startMs < duration && segment.endMs <= duration
+    }
+}
 
 data class BookReadiness(
     val missingPhotoIds: List<String>,
@@ -13,11 +24,11 @@ data class BookReadiness(
     val canPlay: Boolean,
 )
 
-fun StoryBook.readiness(): BookReadiness {
+fun StoryBook.readiness(probe: MediaProbe = AndroidMediaProbe): BookReadiness {
     val pages = spreads
-    val missingAudio = pages.filterNot { it.hasUsableAudio }.map { it.spreadId }
+    val missingAudio = pages.filterNot { it.hasUsableAudio(probe) }.map { it.spreadId }
     return BookReadiness(
-        missingPhotoIds = pages.filterNot { it.hasUsablePhoto }.map { it.spreadId },
+        missingPhotoIds = pages.filterNot { it.hasUsablePhoto(probe) }.map { it.spreadId },
         missingAudioIds = missingAudio,
         canPlay = pages.isNotEmpty() && missingAudio.isEmpty(),
     )

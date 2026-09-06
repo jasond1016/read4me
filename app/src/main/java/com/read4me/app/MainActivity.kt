@@ -59,89 +59,6 @@ class RecordingRecoveryViewModel : ViewModel() {
 }
 
 class MainActivity : ComponentActivity() {
-    private sealed interface Destination {
-        enum class AudioBookReturn { LIBRARY, DETAILS, REVIEW, COMPLETION_SUMMARY }
-
-        data object Library : Destination
-        data object Setup : Destination
-        data class ChildReading(val returnBookId: String? = null) : Destination
-        data class BookDetails(val book: StoryBook) : Destination
-        data class SpreadPreview(val book: StoryBook, val spreadId: String) : Destination
-        data class Recording(
-            val book: StoryBook,
-            val mode: RecordingMode = RecordingMode.CAMERA,
-            val returnToDetails: Boolean = false,
-        ) : Destination
-        data class Review(
-            val book: StoryBook,
-            val initialUndo: StoryBook? = null,
-            val undoImage: java.io.File? = null,
-            val undoImages: List<java.io.File> = emptyList(),
-            val organizeDraft: StoryBook? = null,
-            val organizeSelected: String? = null,
-            val organizeCurrent: String? = null,
-            val organizeImages: List<java.io.File> = emptyList(),
-            val focusedSpreadId: String? = null,
-            val pageListReturnTo: AudioBookReturn? = null,
-            val resumePageListPlayback: Boolean = false,
-            val returnToDetails: Boolean = false,
-            val pageListBackToCaller: Boolean = false,
-            val returnToPreviewSpreadId: String? = null,
-        ) : Destination
-        data class AudioBook(
-            val book: StoryBook,
-            val returnTo: AudioBookReturn,
-            val initiallyShowPageList: Boolean = false,
-            val playWhenReady: Boolean = true,
-            val pageListBackToCaller: Boolean = false,
-        ) : Destination
-        data class CompletionSummary(val book: StoryBook) : Destination
-        data class Rerecord(
-            val book: StoryBook,
-            val spreadId: String,
-            val returnToDetails: Boolean = false,
-            val returnToPreviewSpreadId: String? = null,
-            val returnToPlayer: AudioBook? = null,
-        ) : Destination
-        data class Recapture(
-            val book: StoryBook,
-            val spreadId: String,
-            val undo: StoryBook?,
-            val undoImage: java.io.File?,
-            val returnToLibrary: Boolean = false,
-            val returnToDetails: Boolean = false,
-            val returnToPreview: Boolean = false,
-            val capturePurpose: ReferenceCapturePurpose = ReferenceCapturePurpose.ADD_REFERENCE,
-            val returnToPlayer: AudioBook? = null,
-        ) : Destination
-        data class BatchRecapture(
-            val book: StoryBook,
-            val remainingSpreadIds: List<String>,
-            val completed: Int,
-            val total: Int,
-            val returnToDetails: Boolean = false,
-        ) : Destination
-        data class VerifyReference(
-            val book: StoryBook,
-            val spreadId: String,
-            val undo: StoryBook?,
-            val undoImage: java.io.File?,
-            val returnToLibrary: Boolean,
-            val returnToDetails: Boolean = false,
-            val returnToPreview: Boolean = false,
-            val returnToPlayer: AudioBook? = null,
-        ) : Destination
-        data class InsertSpread(
-            val baseBook: StoryBook,
-            val draftBook: StoryBook,
-            val anchorSpreadId: String,
-            val organizeSelected: String?,
-            val organizeImages: List<java.io.File>,
-            val editorUndo: StoryBook?,
-            val editorUndoImages: List<java.io.File>,
-            val returnToDetails: Boolean = false,
-        ) : Destination
-    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -151,7 +68,13 @@ class MainActivity : ComponentActivity() {
         setContent {
             Read4MeTheme {
                 val recordingRecovery: RecordingRecoveryViewModel = viewModel()
-                var destination: Destination by remember {
+                val destinationSaver = remember(repository) {
+                    androidx.compose.runtime.saveable.mapSaver(
+                        save = { route: Destination -> route.checkpoint() },
+                        restore = { state -> restoreDestination(state.mapValues { it.value as String }) { id -> repository.loadAll().firstOrNull { it.id == id } } },
+                    )
+                }
+                var destination: Destination by androidx.compose.runtime.saveable.rememberSaveable(stateSaver = destinationSaver) {
                     mutableStateOf(
                         recordingRecovery.pendingCandidate?.let {
                             Destination.Recording(it, recordingRecovery.recordingMode)
@@ -168,6 +91,7 @@ class MainActivity : ComponentActivity() {
                 var libraryInitialTab by remember { mutableStateOf(WarmShellTab.LIBRARY) }
                 val scope = rememberCoroutineScope()
                 val libraryState = rememberSaveableStateHolder()
+                val pageListState = rememberSaveableStateHolder()
 
                 val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
                     if (uri != null) scope.launch {
@@ -663,6 +587,7 @@ class MainActivity : ComponentActivity() {
                     )
 
                     is Destination.AudioBook -> AudioBookPlayerScreen(
+                        pageListState = pageListState,
                         book = current.book,
                         initiallyShowPageList = current.initiallyShowPageList,
                         playWhenReady = current.playWhenReady,

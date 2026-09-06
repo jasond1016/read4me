@@ -49,6 +49,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -93,8 +94,7 @@ fun BookOverviewScreen(
     onCreateBook: () -> Unit,
     onOpenMe: () -> Unit,
 ) {
-    val playbackSegments = book.spreads.flatMap { it.effectiveSegments }
-    val playable = playbackSegments.isNotEmpty() && playbackSegments.all { it.file.isFile }
+    val playable = book.readiness().canPlay
     val missingPhotos = book.readiness().missingPhotoIds.size
     BackHandler(onBack = onBack)
     Box(Modifier.fillMaxSize().background(WarmPaper)) {
@@ -274,7 +274,7 @@ private fun BookOverviewActions(
     onBatchRecapture: () -> Unit,
 ) {
     val complete = book.status == StoryStatus.COMPLETE
-    val hasPhotos = book.spreads.any { spread -> spread.references.any { it.file.isFile } }
+    val hasPhotos = book.spreads.any { it.hasUsablePhoto }
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Button(
             onClick = if (complete) onPlayBook else onContinueRecording,
@@ -404,7 +404,7 @@ fun ReviewScreen(
         remember(book.id, book.markers.map { it.spreadId }) { StoryEditSession(book, initialUndo) }
     var current by remember(book.id) { mutableStateOf(book) }
     var selectedId by
-        remember(book.id) {
+        rememberSaveable(book.id) {
             mutableStateOf(
                 initialOrganizeCurrent?.takeIf { id ->
                     initialOrganizeDraft?.markers?.any { it.spreadId == id } == true
@@ -732,7 +732,7 @@ private fun ReviewTopBar(
                 }
                 if (returnActionLabel == null &&
                     book.status == StoryStatus.COMPLETE &&
-                        book.spreads.flatMap { it.effectiveSegments }.all { it.file.isFile }
+                        book.readiness().canPlay
                 )
                     TextButton(onClick = onPlayBook) {
                         Text("整本播放", color = Coral, fontWeight = FontWeight.Bold)

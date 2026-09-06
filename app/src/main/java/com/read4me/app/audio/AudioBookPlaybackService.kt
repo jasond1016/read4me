@@ -18,6 +18,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import com.read4me.app.data.StoryRepository
+import com.read4me.app.model.readiness
 
 @OptIn(UnstableApi::class)
 class AudioBookPlaybackService : MediaSessionService(), Player.Listener {
@@ -91,7 +92,7 @@ class AudioBookPlaybackService : MediaSessionService(), Player.Listener {
     private fun openBook(bookId: String, playWhenReady: Boolean) {
         val book = StoryRepository(this).loadAll().firstOrNull { it.id == bookId }
         val nextPlan = book?.let(AudioBookPlan::from)
-        if (nextPlan == null || nextPlan.entries.isEmpty() || nextPlan.entries.any { !it.file.isFile }) {
+        if (nextPlan == null || nextPlan.entries.isEmpty() || book.readiness().canPlay.not()) {
             exoPlayer.stop()
             exoPlayer.clearMediaItems()
             plan = null

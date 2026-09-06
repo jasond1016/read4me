@@ -40,8 +40,7 @@ internal fun shouldFreezeForOrientation(
         val distance = kotlin.math.abs(angleDegrees - stableAngleDegrees)
         minOf(distance, 360 - distance)
     } else 0
-    return bucket != configurationBucket ||
-        (stableBucket != null && bucket != stableBucket) ||
+    return (stableBucket?.let { bucket != it } ?: (bucket != configurationBucket)) ||
         angleDistance >= 20
 }
 

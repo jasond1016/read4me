@@ -80,7 +80,7 @@ fun WarmTopBar(title: String, onBack: (() -> Unit)? = null) {
                 Text("返回", color = WarmMoss, modifier = Modifier.padding(start = 4.dp))
             }
         }
-        Text(title, style = MaterialTheme.typography.titleLarge, color = WarmBrown, fontWeight = FontWeight.Bold)
+        Text(title, modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleLarge, color = WarmBrown, fontWeight = FontWeight.Bold)
     }
 }
 

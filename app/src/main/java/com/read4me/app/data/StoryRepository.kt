@@ -53,7 +53,13 @@ class StoryRepository(context: Context) {
         File(File(book.directory, "spreads"), "$spreadId.jpg")
 
     fun save(book: StoryBook) {
-        validateFiles(book, verifyMediaDuration = false)
+        // Repair one page at a time even if another already-published file has disappeared.
+        // New references still have to exist, and containment is always checked.
+        val retainedFiles = load(book.directory)?.let { previous ->
+            previous.markers.flatMap { marker -> marker.references.map { it.file } + marker.segments.map { it.file } }
+                .map { it.canonicalFile }.toSet()
+        }.orEmpty()
+        validateFiles(book, verifyMediaDuration = false, retainedFiles = retainedFiles)
         val markers = JSONArray().apply {
             book.markers.forEach { marker ->
                 put(JSONObject().apply {
@@ -237,7 +243,7 @@ class StoryRepository(context: Context) {
         }
     }
 
-    private fun validateFiles(book: StoryBook, verifyMediaDuration: Boolean = true) {
+    private fun validateFiles(book: StoryBook, verifyMediaDuration: Boolean = true, retainedFiles: Set<File> = emptySet()) {
         val root = book.directory.canonicalFile
         fun isContained(file: File): Boolean {
             val canonical = file.canonicalFile
@@ -258,11 +264,11 @@ class StoryRepository(context: Context) {
             if (book.markers.isEmpty()) book.resumeSpreadId == null
             else book.resumeSpreadId != null && book.markers.any { it.spreadId == book.resumeSpreadId }
         ) { "Recording cursor does not identify a spread" }
-        require(book.markers.all { marker -> marker.references.all { isContained(it.file) && it.file.isFile } }) {
+        require(book.markers.all { marker -> marker.references.all { isContained(it.file) && canRetainMediaFile(it.file, retainedFiles) } }) {
             "A spread image is missing or unsafe"
         }
         require(book.markers.flatMap(SpreadMarker::segments).all {
-            isContained(it.file) && it.file.isFile && it.startMs >= 0 && it.endMs > it.startMs
+            isContained(it.file) && canRetainMediaFile(it.file, retainedFiles) && it.startMs >= 0 && it.endMs > it.startMs
         }) {
             "A narration segment is missing, unsafe, or invalid"
         }
