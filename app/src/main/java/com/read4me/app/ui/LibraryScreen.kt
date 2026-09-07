@@ -87,9 +87,7 @@ fun LibraryScreen(
     onPermanentlyDelete: (StoryRepository.TrashedBook) -> Unit,
     onImportLibrary: () -> Unit,
     onExportLibrary: () -> Unit,
-    onClearRecognitionHistory: () -> Unit,
     onClearMediaCache: () -> Unit,
-    onRepairRecognition: (StoryBook, String) -> Unit,
 ) {
     var shellTab by rememberSaveable(initialShellTab) { mutableStateOf(initialShellTab) }
     var filter by rememberSaveable { mutableStateOf("全部") }
@@ -115,9 +113,9 @@ fun LibraryScreen(
                             .padding(horizontal = if (wide) 36.dp else 20.dp, vertical = 24.dp),
                     ) {
                         LibraryMaintenance(
-                            books, trashedBooks, recognitionSummaries, wide, archiveMessage, onImport,
-                            onImportLibrary, onExportLibrary, onClearRecognitionHistory, onClearMediaCache,
-                            onRepairRecognition, onRestore, onPermanentlyDelete,
+                            trashedBooks, wide, archiveMessage, onImport,
+                            onImportLibrary, onExportLibrary, onClearMediaCache,
+                            onRestore, onPermanentlyDelete,
                         )
                         Spacer(Modifier.height(28.dp))
                     }
@@ -288,17 +286,13 @@ private fun LibraryHome(
 
 @Composable
 private fun LibraryMaintenance(
-    books: List<StoryBook>,
     trashedBooks: List<StoryRepository.TrashedBook>,
-    summaries: List<RecognitionSummary>,
     wide: Boolean,
     archiveMessage: String?,
     onImport: () -> Unit,
     onImportLibrary: () -> Unit,
     onExportLibrary: () -> Unit,
-    onClearRecognitionHistory: () -> Unit,
     onClearMediaCache: () -> Unit,
-    onRepairRecognition: (StoryBook, String) -> Unit,
     onRestore: (StoryRepository.TrashedBook) -> Unit,
     onPermanentlyDelete: (StoryRepository.TrashedBook) -> Unit,
 ) {
@@ -314,16 +308,6 @@ private fun LibraryMaintenance(
                     OutlinedButton(onClick = onExportLibrary, modifier = Modifier.weight(1f)) { Text("导出整库") }
                     OutlinedButton(onClick = onImportLibrary, modifier = Modifier.weight(1f)) { Text("恢复整库") }
                 }
-            } }
-            WarmCard(Modifier.fillMaxWidth()) { Column(Modifier.padding(18.dp)) {
-                Text("识别记录", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                Text("${summaries.size} 个书面有本地记录 · 不保存摄像头画面", color = Ink.copy(.62f))
-                summaries.filter { it.needsNewReference }.forEach { summary ->
-                    val book = books.firstOrNull { it.id == summary.bookId }
-                    val spread = book?.spreads?.firstOrNull { it.spreadId == summary.spreadId }
-                    if (book != null && spread != null) TextButton(onClick = { onRepairRecognition(book, spread.spreadId) }) { Text("补拍 ${book.title} · 书面 ${spread.ordinal}") }
-                }
-                TextButton(onClick = onClearRecognitionHistory) { Text("清除识别记录", color = Coral) }
             } }
             WarmCard(Modifier.fillMaxWidth()) { Row(Modifier.padding(18.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) { Text("媒体缓存", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold); Text("波形和缩略图可自动重建", color = Ink.copy(.58f)) }

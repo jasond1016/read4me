@@ -267,23 +267,10 @@ class MainActivity : ComponentActivity() {
                             libraryImportLauncher.launch(arrayOf("application/zip", "application/octet-stream"))
                         },
                         onExportLibrary = { libraryExportLauncher.launch("read4me-library.read4me-library") },
-                        onClearRecognitionHistory = {
-                            recognitionHistory.clear()
-                            recognitionSummaries = emptyList()
-                            archiveMessage = "识别记录已清除"
-                        },
                         onClearMediaCache = {
                             PersistentWaveformCache(java.io.File(cacheDir, "read4me/waveforms")).clear()
                             StoryImageLoader.clearDisk(this@MainActivity)
                             archiveMessage = "波形和缩略图缓存已清除"
-                        },
-                        onRepairRecognition = { book, spreadId ->
-                            val target = Destination.Recapture(book, spreadId, null, null, returnToLibrary = true)
-                            if (hasCameraPermission()) destination = target
-                            else {
-                                permissionTarget = target
-                                permissionLauncher.launch(arrayOf(Manifest.permission.CAMERA))
-                            }
                         },
                     ) }
 

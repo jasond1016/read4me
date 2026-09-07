@@ -8,58 +8,50 @@ import androidx.camera.core.CameraSelector
 import androidx.camera.view.CameraController
 import androidx.camera.view.LifecycleCameraController
 import androidx.camera.view.PreviewView
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
-import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
@@ -93,142 +85,6 @@ private enum class ChildReadingPhase {
     PAUSED,
     MOVED,
     FINISHED,
-}
-
-@Composable
-private fun ChildReadingStatus(
-    phase: ChildReadingPhase,
-    status: String,
-    book: StoryBook?,
-    spread: StorySpread?,
-    progress: Float,
-) {
-    val pulse = rememberInfiniteTransition(label = "readingPulse")
-    val pulseScale by pulse.animateFloat(
-        initialValue = 0.92f,
-        targetValue = 1.08f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 850),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "readingPulseScale",
-    )
-    val accent = when (phase) {
-        ChildReadingPhase.PLAYING -> Coral
-        ChildReadingPhase.FINISHED -> Moss
-        ChildReadingPhase.MOVED -> Honey
-        ChildReadingPhase.PAUSED -> Honey
-        ChildReadingPhase.CONFIRMING -> Color(0xFF6B7FA3)
-        ChildReadingPhase.NO_BOOKS,
-        ChildReadingPhase.LOOKING -> Ink.copy(alpha = 0.5f)
-    }
-    val statusIcon = when (phase) {
-        ChildReadingPhase.PLAYING -> AppIcons.Play
-        ChildReadingPhase.FINISHED -> AppIcons.Restart
-        ChildReadingPhase.MOVED -> AppIcons.Reading
-        ChildReadingPhase.PAUSED -> AppIcons.Pause
-        ChildReadingPhase.CONFIRMING -> AppIcons.More
-        ChildReadingPhase.NO_BOOKS -> AppIcons.Library
-        ChildReadingPhase.LOOKING -> AppIcons.Fullscreen
-    }
-
-    Row(
-        Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
-        Box(
-            Modifier
-                .size(width = 94.dp, height = 72.dp)
-                .clip(RoundedCornerShape(18.dp))
-                .background(accent.copy(alpha = 0.14f)),
-            contentAlignment = Alignment.Center,
-        ) {
-            if (spread?.imageFile != null) {
-                StoryImage(
-                    spread.imageFile,
-                    Modifier
-                        .fillMaxSize()
-                        .graphicsLayer { alpha = if (phase == ChildReadingPhase.MOVED) 0.55f else 1f },
-                )
-            } else {
-                AppIcon(
-                    statusIcon,
-                    contentDescription = null,
-                    tint = accent,
-                    size = 32.dp,
-                    modifier = Modifier.graphicsLayer {
-                        val scale = if (phase == ChildReadingPhase.PLAYING) pulseScale else 1f
-                        scaleX = scale
-                        scaleY = scale
-                    },
-                )
-            }
-            if (spread?.imageFile != null) {
-                Surface(
-                    color = accent,
-                    shape = CircleShape,
-                    modifier = Modifier.align(Alignment.BottomEnd).padding(5.dp).size(28.dp),
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        AppIcon(
-                            statusIcon,
-                            contentDescription = null,
-                            tint = Color.White,
-                            size = 18.dp,
-                            modifier = Modifier.graphicsLayer {
-                                val scale = if (phase == ChildReadingPhase.PLAYING) pulseScale else 1f
-                                scaleX = scale
-                                scaleY = scale
-                            },
-                        )
-                    }
-                }
-            }
-        }
-        Column(Modifier.weight(1f)) {
-            Text(status, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
-            Text(
-                when (phase) {
-                    ChildReadingPhase.NO_BOOKS -> "先录完一本绘本，并为书面补拍照片。"
-                    ChildReadingPhase.LOOKING -> "让整页进入取景框，手移开，保持光线均匀。"
-                    ChildReadingPhase.CONFIRMING -> "已经看到绘本，请保持不动。"
-                    ChildReadingPhase.PLAYING -> "正在播放这一页的录音。"
-                    ChildReadingPhase.MOVED -> "把整页放回框里，停稳后会继续识别。"
-                    ChildReadingPhase.PAUSED -> "点播放继续听，也可以翻到下一页。"
-                    ChildReadingPhase.FINISHED -> "这一页听完了，翻到下一页继续。"
-                }, style = MaterialTheme.typography.bodyMedium, color = Moss,
-                modifier = Modifier.padding(top = 4.dp),
-            )
-            if (book != null && spread != null) {
-                Text(
-                    if (phase == ChildReadingPhase.MOVED) {
-                        "刚才是《${book.title}》 · 第 ${spread.ordinal} 个书面"
-                    } else {
-                        "《${book.title}》 · 第 ${spread.ordinal} 个书面"
-                    },
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = Ink.copy(alpha = 0.58f),
-                    maxLines = 1,
-                )
-            }
-        }
-    }
-    val showsProgress = when (phase) {
-        ChildReadingPhase.PLAYING,
-        ChildReadingPhase.PAUSED,
-        ChildReadingPhase.MOVED,
-        ChildReadingPhase.FINISHED -> true
-        else -> false
-    }
-    if (spread != null && showsProgress) {
-        LinearProgressIndicator(
-            progress = { progress.coerceIn(0f, 1f) },
-            modifier = Modifier.fillMaxWidth().padding(top = 14.dp).height(6.dp).clip(CircleShape),
-            color = accent,
-            trackColor = accent.copy(alpha = 0.16f),
-        )
-    }
 }
 
 @Composable
@@ -277,15 +133,12 @@ fun ChildReadingScreen(
     var inliers by remember { mutableStateOf(0) }
     var isMoving by remember { mutableStateOf(false) }
     var pausedForPageChange by remember { mutableStateOf(false) }
-    var diagnostic by remember { mutableStateOf("等待第一组稳定画面") }
     var choosingManualSpread by remember { mutableStateOf(false) }
-    var manualCorrection by remember { mutableStateOf(false) }
     var parentMode by remember { mutableStateOf(false) }
     var readingPhase by remember {
         mutableStateOf(if (orbReferences.isEmpty()) ChildReadingPhase.NO_BOOKS else ChildReadingPhase.LOOKING)
     }
     var phaseBeforeConfirmation by remember { mutableStateOf(ChildReadingPhase.LOOKING) }
-    var playbackProgress by remember { mutableFloatStateOf(0f) }
 
     KeepScreenOn()
 
@@ -364,12 +217,6 @@ fun ChildReadingScreen(
         }
     }
 
-    LaunchedEffect(isPlaying) {
-        while (isPlaying) {
-            player.progress()?.let { playbackProgress = it }
-            delay(250L)
-        }
-    }
 
     BackHandler {
         if (parentMode) {
@@ -389,7 +236,6 @@ fun ChildReadingScreen(
         inliers = geometricInliers
         isPlaying = true
         readingPhase = ChildReadingPhase.PLAYING
-        playbackProgress = 0f
         status = "听故事"
         val started = player.play(
             spread.effectiveSegments,
@@ -401,7 +247,6 @@ fun ChildReadingScreen(
             onFinished = {
                 isPlaying = false
                 readingPhase = ChildReadingPhase.FINISHED
-                playbackProgress = 1f
                 status = "讲完啦，请翻页"
             },
         )
@@ -494,7 +339,6 @@ fun ChildReadingScreen(
                         evaluatedArmed && recognitionArmed.get() &&
                         recognitionGeneration.get() == evaluatedGeneration && lifecycleResumed.get()
                 }
-                if (currentDecision != null) diagnostic = recognitionDiagnostic(currentDecision)
                 if (currentDecision != null && !isPlaying && !result.pageTurned && !pausedForPageChange &&
                     readingPhase != ChildReadingPhase.PAUSED && readingPhase != ChildReadingPhase.FINISHED
                 ) {
@@ -533,7 +377,6 @@ fun ChildReadingScreen(
                                 }
                             }
                             !isCurrentSpread -> {
-                                manualCorrection = false
                                 play(book, spread, it.inliers)
                             }
                         }
@@ -553,6 +396,7 @@ fun ChildReadingScreen(
 
     Surface(Modifier.fillMaxSize(), color = Ink) {
         Box(Modifier.fillMaxSize()) {
+            // The camera has a stable, full-screen viewport in every playback state.
             AndroidView(
                 factory = { viewContext ->
                     PreviewView(viewContext).apply {
@@ -560,176 +404,156 @@ fun ChildReadingScreen(
                         this.controller = controller
                     }
                 },
-                modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth().aspectRatio(1.32f),
+                modifier = Modifier.fillMaxSize(),
             )
-
-            Box(
-                Modifier.align(Alignment.TopCenter).fillMaxWidth().aspectRatio(1.32f),
-            ) {
-                BookGuideFrame(active = isMoving, modifier = Modifier.align(Alignment.Center))
-            }
-
-            Text(
-                "家长",
-                color = Color.White.copy(alpha = 0.62f),
-                style = MaterialTheme.typography.labelMedium,
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(18.dp)
-                    .background(Ink.copy(alpha = 0.38f), RoundedCornerShape(12.dp))
-                    .pointerInput(Unit) {
-                        detectTapGestures(onLongPress = { parentMode = true })
-                    }
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-            )
-
-            Text(
-                "返回书架",
-                color = Color.White,
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .padding(18.dp)
-                    .background(Ink.copy(alpha = 0.5f), RoundedCornerShape(14.dp))
-                    .clickable(onClick = onExit)
-                    .padding(horizontal = 14.dp, vertical = 10.dp),
-            )
-
-            Surface(
-                color = Paper.copy(alpha = 0.96f),
-                shape = RoundedCornerShape(topStart = 30.dp, topEnd = 30.dp),
-                modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth(),
-            ) {
-                Column(
-                    Modifier.padding(horizontal = 24.dp, vertical = 22.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
+            BoxWithConstraints(Modifier.fillMaxSize().safeDrawingPadding()) {
+                val landscape = maxWidth > maxHeight
+                // Controls overlay the preview. The guide keeps its proportions and is
+                // only a composition aid; recognition uses the complete camera viewport.
+                BoxWithConstraints(
+                    Modifier.fillMaxSize().padding(
+                        start = if (landscape) 60.dp else 16.dp,
+                        end = if (landscape) 60.dp else 16.dp,
+                        top = if (landscape) 12.dp else 60.dp,
+                        bottom = 64.dp,
+                    ),
                 ) {
-                    ChildReadingStatus(
-                        phase = readingPhase,
-                        status = status,
-                        book = currentBook,
-                        spread = currentSpread,
-                        progress = playbackProgress,
-                    )
-                    currentSpread?.let { spread ->
-                        Row(
-                            Modifier.fillMaxWidth().padding(top = 16.dp),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        ) {
-                            OutlinedButton(
-                                onClick = {
-                                    if (isPlaying) {
-                                        if (player.pause()) {
-                                            isPlaying = false
-                                            pausedForPageChange = false
-                                            readingPhase = ChildReadingPhase.PAUSED
-                                            status = "休息一下"
-                                        }
-                                    } else if (readingPhase == ChildReadingPhase.PAUSED && player.resume()) {
-                                        isPlaying = true
-                                        readingPhase = ChildReadingPhase.PLAYING
-                                        status = "继续听故事"
-                                    } else {
-                                        currentBook?.let { play(it, spread, inliers) }
-                                    }
-                                },
-                                enabled = readingPhase != ChildReadingPhase.MOVED,
-                                modifier = Modifier.weight(1f).height(64.dp),
-                                shape = RoundedCornerShape(20.dp),
-                            ) {
-                                if (readingPhase != ChildReadingPhase.MOVED) {
-                                    AppIcon(if (isPlaying) AppIcons.Pause else AppIcons.Play, null, size = 28.dp)
-                                }
-                                Text(
-                                    when {
-                                        isPlaying -> "暂停一下"
-                                        readingPhase == ChildReadingPhase.PAUSED -> "继续听"
-                                        readingPhase == ChildReadingPhase.MOVED -> "放回书面"
-                                        else -> "再听一次"
-                                    },
-                                    modifier = if (readingPhase == ChildReadingPhase.MOVED) Modifier else Modifier.padding(start = 6.dp),
-                                )
-                            }
-                            Button(
-                                onClick = { currentBook?.let { play(it, spread, inliers) } },
-                                enabled = readingPhase != ChildReadingPhase.MOVED,
-                                modifier = Modifier.weight(1f).height(64.dp),
-                                shape = RoundedCornerShape(20.dp),
-                                colors = ButtonDefaults.buttonColors(containerColor = Moss),
-                            ) {
-                                AppIcon(AppIcons.Restart, null)
-                                Text("从头听", modifier = Modifier.padding(start = 6.dp))
+                    val guide = centeredCaptureFrame(maxWidth.value, maxHeight.value, if (landscape) 1.5f else .75f)
+                    Canvas(Modifier.align(Alignment.Center).size(guide.width.dp, guide.height.dp)) {
+                        val color = if (isMoving) Honey else Color.White.copy(alpha = .9f)
+                        val length = minOf(28.dp.toPx(), size.minDimension * .15f)
+                        val inset = 3.dp.toPx()
+                        listOf(
+                            Triple(Offset(inset, inset), 1f, 1f),
+                            Triple(Offset(size.width - inset, inset), -1f, 1f),
+                            Triple(Offset(inset, size.height - inset), 1f, -1f),
+                            Triple(Offset(size.width - inset, size.height - inset), -1f, -1f),
+                        ).forEach { (corner, x, y) ->
+                            listOf(corner + Offset(x * length, 0f), corner + Offset(0f, y * length)).forEach { end ->
+                                drawLine(Ink.copy(alpha = .6f), corner, end, 5.dp.toPx(), StrokeCap.Round)
+                                drawLine(color, corner, end, 2.dp.toPx(), StrokeCap.Round)
                             }
                         }
                     }
                 }
-            }
-
-            if (parentMode) {
+                AppIconButton(
+                    AppIcons.Back, "返回书架", onExit,
+                    modifier = Modifier.align(Alignment.TopStart).padding(8.dp)
+                        .background(Ink.copy(alpha = .55f), CircleShape),
+                    tint = Color.White,
+                )
+                AppIconButton(
+                    AppIcons.More, "识别帮助与选页播放", { parentMode = true },
+                    modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)
+                        .background(Ink.copy(alpha = .55f), CircleShape),
+                    tint = Color.White,
+                )
                 Surface(
-                    color = Paper,
-                    shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
-                    modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth(),
+                    color = Ink.copy(alpha = .78f),
+                    shape = RoundedCornerShape(24.dp),
+                    modifier = Modifier.align(Alignment.BottomCenter).padding(8.dp)
+                        .widthIn(max = 440.dp).fillMaxWidth(),
                 ) {
-                    Column(Modifier.padding(horizontal = 20.dp, vertical = 16.dp)) {
-                        Text("家长诊断", style = MaterialTheme.typography.titleLarge)
+                    Row(
+                        Modifier.height(48.dp).padding(start = 16.dp, end = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
                         Text(
-                            "绘本：${currentBook?.title ?: "未识别"}　书面：${currentSpread?.ordinal ?: "-"}　几何内点：$inliers",
+                            when (readingPhase) {
+                                ChildReadingPhase.NO_BOOKS -> "先为绘本添加书面照片"
+                                ChildReadingPhase.LOOKING -> if (isMoving) "请放稳书面" else "对准完整书面，停稳即播放"
+                                ChildReadingPhase.CONFIRMING -> "正在确认书面…"
+                                ChildReadingPhase.PLAYING -> "第 ${currentSpread?.ordinal ?: "-"} 个书面 · 播放中"
+                                ChildReadingPhase.PAUSED -> "已暂停 · 可以继续或翻页"
+                                ChildReadingPhase.MOVED -> "请放回书面"
+                                ChildReadingPhase.FINISHED -> "讲完啦，翻页继续"
+                            },
+                            color = Color.White,
                             style = MaterialTheme.typography.bodyMedium,
-                            modifier = Modifier.padding(top = 8.dp),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f).semantics { liveRegion = LiveRegionMode.Polite },
                         )
-                        Text(
-                            diagnostic,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Ink.copy(alpha = 0.62f),
-                            modifier = Modifier.padding(top = 4.dp),
-                        )
-                        if (manualCorrection) {
-                            Text("当前识别已手动纠正", color = Coral, style = MaterialTheme.typography.labelMedium)
+                        currentSpread?.let { spread ->
+                            AppIconButton(
+                                if (isPlaying) AppIcons.Pause else AppIcons.Play,
+                                if (isPlaying) "暂停" else "播放",
+                                {
+                                    if (readingPhase != ChildReadingPhase.MOVED) {
+                                        if (isPlaying) {
+                                            if (player.pause()) {
+                                                isPlaying = false
+                                                pausedForPageChange = false
+                                                readingPhase = ChildReadingPhase.PAUSED
+                                                status = "休息一下"
+                                            }
+                                        } else if (readingPhase == ChildReadingPhase.PAUSED && player.resume()) {
+                                            isPlaying = true
+                                            readingPhase = ChildReadingPhase.PLAYING
+                                            status = "继续听故事"
+                                        } else currentBook?.let { play(it, spread, inliers) }
+                                    }
+                                },
+                                tint = if (readingPhase == ChildReadingPhase.MOVED) Color.White.copy(alpha = .35f) else Color.White,
+                            )
+                            AppIconButton(AppIcons.Restart, "从头听", {
+                                if (readingPhase != ChildReadingPhase.MOVED) currentBook?.let { play(it, spread, inliers) }
+                            }, tint = if (readingPhase == ChildReadingPhase.MOVED) Color.White.copy(alpha = .35f) else Color.White)
                         }
-                        TextButton(onClick = { choosingManualSpread = !choosingManualSpread }) {
-                            Text(if (choosingManualSpread) "收起纠正选项" else "手动纠正识别")
-                        }
-                        if (choosingManualSpread) {
-                            Row(
-                                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                            ) {
-                                books.forEach { choiceBook ->
-                                    choiceBook.spreads.forEach { choiceSpread ->
-                                        TextButton(
-                                            onClick = {
-                                                manualCorrection = true
-                                                choosingManualSpread = false
-                                                runCatching { recognitionHistory.record(RecognitionEvent(
-                                                    timestampMs = System.currentTimeMillis(),
-                                                    bookId = choiceBook.id,
-                                                    spreadId = choiceSpread.spreadId,
-                                                    outcome = RecognitionEvent.Outcome.MANUAL_CORRECTION,
-                                                    bestInliers = 0,
-                                                    secondInliers = null,
-                                                    latencyMs = 0L,
-                                                    searchPath = "MANUAL",
-                                                )) }
-                                                play(choiceBook, choiceSpread, 0)
-                                                status = "正在讲《${choiceBook.title}》第 ${choiceSpread.ordinal} 个书面"
-                                            },
-                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                                        ) { Text("${choiceBook.title} ${choiceSpread.ordinal}", maxLines = 1) }
+                    }
+                }
+
+                if (parentMode) {
+                    Surface(
+                        color = Paper,
+                        shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+                        modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth(),
+                    ) {
+                        Column(Modifier.heightIn(max = maxHeight * .8f).verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 16.dp)) {
+                            Text("识别帮助", style = MaterialTheme.typography.titleLarge)
+                            Text("把书面完整放进画面，放稳并避开反光。双页建议横屏。", modifier = Modifier.padding(top = 8.dp))
+                            TextButton(onClick = { choosingManualSpread = !choosingManualSpread }) {
+                                Text(if (choosingManualSpread) "收起选页" else "没播对？选页播放")
+                            }
+                            if (choosingManualSpread) {
+                                Row(
+                                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                ) {
+                                    books.forEach { choiceBook ->
+                                        choiceBook.spreads.forEach { choiceSpread ->
+                                            TextButton(
+                                                onClick = {
+                                                    choosingManualSpread = false
+                                                    runCatching { recognitionHistory.record(RecognitionEvent(
+                                                        timestampMs = System.currentTimeMillis(),
+                                                        bookId = choiceBook.id,
+                                                        spreadId = choiceSpread.spreadId,
+                                                        outcome = RecognitionEvent.Outcome.MANUAL_CORRECTION,
+                                                        bestInliers = 0,
+                                                        secondInliers = null,
+                                                        latencyMs = 0L,
+                                                        searchPath = "MANUAL",
+                                                    )) }
+                                                    play(choiceBook, choiceSpread, 0)
+                                                    status = "正在讲《${choiceBook.title}》第 ${choiceSpread.ordinal} 个书面"
+                                                },
+                                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                            ) { Text("${choiceBook.title} ${choiceSpread.ordinal}", maxLines = 1) }
+                                        }
                                     }
                                 }
                             }
-                        }
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            TextButton(onClick = onExit) { Text("退出阅读模式", color = Coral) }
-                            Button(
-                                onClick = {
-                                    parentMode = false
-                                    choosingManualSpread = false
-                                },
-                                colors = ButtonDefaults.buttonColors(containerColor = Moss),
-                            ) { Text("关闭家长面板") }
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                TextButton(onClick = onExit) { Text("返回书架", color = Coral) }
+                                Button(
+                                    onClick = {
+                                        parentMode = false
+                                        choosingManualSpread = false
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = Moss),
+                                ) { Text("返回取景") }
+                            }
                         }
                     }
                 }
